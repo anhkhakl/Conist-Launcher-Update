@@ -180,45 +180,16 @@ def create_desktop_shortcut(target_path, icon_path):
 
 
 def get_base_path():
-    """Hàm lấy vị trí file chạy: Sửa lỗi not defined"""
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-def resource_path(relative_path):
-    """Hàm lấy tài nguyên trong file exe"""
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, relative_path)
-    # [FIX] Dùng get_base_path() để luôn tìm thấy file cạnh code
-    return os.path.join(get_base_path(), relative_path)
+    """Luôn lấy đường dẫn của file EXE đang chạy"""
+    # Vì bootstrap.py đóng gói thành EXE nên sys.executable chính là file chạy
+    return os.path.dirname(sys.executable)
 
 # Tên thư mục dữ liệu
 DATA_DIR_NAME = "Launcher_Data"
 
-def check_and_extract_resources():
-    """Hàm tự bung file khi khởi động"""
-    exe_dir = get_base_path()
-    base_data_path = os.path.join(exe_dir, DATA_DIR_NAME)
-    if not os.path.exists(base_data_path): os.makedirs(base_data_path)
+# Đường dẫn tài nguyên (Trỏ thẳng vào thư mục đã được Vỏ giải nén)
+BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 
-    # List các mục cần bung
-    items = ["splash_imgs", "icons", "default_bg.png", "app_icon.ico"]
-    
-    for item in items:
-        internal = resource_path(item)
-        external = os.path.join(base_data_path, item)
-        
-        # Nếu là thư mục
-        if item in ["splash_imgs", "icons"]:
-            if os.path.exists(internal):
-                try: shutil.copytree(internal, external, dirs_exist_ok=True)
-                except: pass
-        # Nếu là file
-        else:
-            if os.path.exists(internal) and not os.path.exists(external):
-                try: shutil.copy2(internal, external)
-                except: pass
 
 # ==========================================
 # 2. CẤU HÌNH & BIẾN TOÀN CỤC (DÙNG SAU KHI ĐÃ CÓ HÀM)
@@ -743,7 +714,7 @@ class SplashLoader:
             animate_opacity=500, 
         )
         self.page.overlay.append(self.container)
-        splash_icon = resource_path("app_icon.ico")
+        splash_icon = os.path.join(BASE_DATA_PATH, "app_icon.ico")
         if os.path.exists(splash_icon):
             self.page.window.icon = splash_icon 
             self.page.update()
@@ -805,7 +776,6 @@ class SplashLoader:
 def main(page: ft.Page):
     cleanup_old_versions()
     # --- [BƯỚC 1] BUNG FILE RA TRƯỚC ---
-    check_and_extract_resources() 
     
     # --- [BƯỚC 2] FIX LỖI ICON TASKBAR ---
     try:
