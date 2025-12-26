@@ -59,5 +59,21 @@
     {"name": "SWORN", "version": "v1.1.0.0.1139", "lnd_url": "https://linkneverdie.net/game/sworn-b-9640#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1GlU13Z1NLJviTpEjGj5jtBxh9CWK1B5S&authuser=0", "viet_link": None, "subtitle": ""},
     {"name": "Mycopunk", "version": "v1.5.7", "lnd_url": "https://linkneverdie.net/game/mycopunk-b-10295#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1sq-tev3tjUqv_y4vRa3Bs8ndcET-T025&authuser=0", "viet_link": None, "subtitle": ""},
     {"name": "Deep Rock Galactic", "version": "v1.39.126583", "lnd_url": "https://linkneverdie.net/game/deep-rock-galactic-b-5913#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1iVedvCV7PfJZgJv-D5OVu_YCTZSk81he&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "Wrap House Simulator", "version": "v1.10", "lnd_url": "https://linkneverdie.net/game/wrap-house-simulator-b-9791#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1OXLiTR6WrOwnk7P3RhnUuEOgr9ZpWIie&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "Sons Of The Forest", "version": "v53951.1", "lnd_url": "https://linkneverdie.net/game/sons-of-the-forest-b-7992#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1_kx0SiDVuiLtTIhKh0HrbA-meFV3kQZO&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "The Zombie Slayers", "version": "v1.1", "lnd_url": "https://linkneverdie.net/game/the-zombie-slayers-b-10453", "download_link": "https://drive.usercontent.google.com/download?id=1Kk0Gsgaz7CyJBI_DJlUtqQ1WWyA_tnrt&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "Atom Zombie Smasher", "version": "v2.11", "lnd_url": "https://linkneverdie.net/game/atom-zombie-smasher-b-10452#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1OmzBCnscF2T9J3Uf3T0xTuGQr7TSXYMs&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "Keep the Heroes Out", "version": "v0.43", "lnd_url": "https://linkneverdie.net/game/keep-the-heroes-out-b-10444", "download_link": "https://drive.usercontent.google.com/download?id=1Yx915xOeWapS6eC-sgZnTi10E_AEwdio&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "Terraria", "version": "v1.4.4.9", "lnd_url": "https://linkneverdie.net/game/terraria-b-1136", "download_link": "https://drive.usercontent.google.com/download?id=1ViFhYpEAerYVmhImjloPMF7Wj4GeNvda&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "Nuclear Throne", "version": "v1.4", "lnd_url": "https://linkneverdie.net/game/nuclear-throne-b-1772#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1QFEjiyAqBjOm7s0MbbUOcL-POLc6_Ewo&authuser=0", "viet_link": None, "subtitle": ""},
+    {"name": "DON'T SCREAM TOGETHER", "version": "v1.4", "lnd_url": "https://linkneverdie.net/game/don-t-scream-together-b-10427", "download_link": "https://drive.usercontent.google.com/download?id=1i9k8qt3BfUfVJ9Aywb4RTxSPJLN_WdR8&authuser=0", "viet_link": None, "subtitle": ""},
+
+
+
+
+
+
+
+
 
 ]
