@@ -214,7 +214,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.0"
+CURRENT_VERSION = "2.0.1"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -974,6 +974,111 @@ def main(page: ft.Page):
     def window_drag(e): 
         page.window.start_dragging()
 
+
+
+
+
+
+
+
+# --- [FIX 1] KHAI BÁO BIẾN CỜ Ở ĐÂY ---
+    is_scanning_updates = False 
+
+    # Hàm xử lý chạy ngầm
+    def process_game_updates_thread():
+        # [QUAN TRỌNG] Dùng nonlocal để chỉnh sửa biến bên trong hàm main
+        nonlocal is_scanning_updates 
+        
+        if is_scanning_updates: return
+        is_scanning_updates = True
+        
+        count_update = 0
+        total = len(GAME_LIST)
+        print(f"[AUTO UPDATE] Bắt đầu quét {total} game...")
+        
+        # Chỉ hiện loading nếu là quét thủ công (hoặc lần đầu)
+        if not APP_CONFIG.get("auto_update_games", False):
+             show_push_notification("Đang kiểm tra cập nhật game ngầm...", "loading")
+
+        try:
+            for i, game in enumerate(GAME_LIST):
+                # Kiểm tra xem switch còn bật không
+                if not APP_CONFIG.get("auto_update_games", False):
+                    break
+
+                # Chỉ check game có link LND
+                if game.get('lnd_url') and len(str(game.get('lnd_url'))) > 10:
+                    try:
+                        # Lấy version online
+                        online_ver = fetch_lnd_version(game['lnd_url'])
+                        local_ver = game['version']
+
+                        if online_ver != "Error" and online_ver != "Unknown":
+                            status_msg = ""
+                            if online_ver != local_ver:
+                                status_msg = f"CÓ BẢN MỚI: {online_ver}"
+                                game['status'] = status_msg
+                                count_update += 1
+                            else:
+                                status_msg = "ĐÃ CẬP NHẬT"
+                                game['status'] = status_msg
+                            
+                            # Cập nhật UI Thẻ Game
+                            try:
+                                for card in grid.controls:
+                                    if card.game['name'] == game['name']:
+                                        card.status_txt.value = status_msg
+                                        card.status_txt.color = "red" if "CÓ BẢN MỚI" in status_msg else "green"
+                                        card.status_txt.update()
+                                        break
+                            except: pass
+                    except: pass
+                
+                time.sleep(0.05) # Nghỉ xíu
+            
+            save_cache()
+            
+            if count_update > 0:
+                show_push_notification(f"Quét xong: {count_update} game có bản mới!", "warning")
+            elif APP_CONFIG.get("auto_update_games", False):
+                # Chỉ báo khi quét xong đợt đầu
+                pass 
+                
+        except Exception as e:
+            print(f"Lỗi Auto Scan: {e}")
+        
+        is_scanning_updates = False
+
+
+
+
+
+
+
+
+# --- [DÁN ĐOẠN NÀY VÀO NGAY SAU process_game_updates_thread] ---
+    
+    def on_auto_update_switch(e):
+        is_on = e.control.value
+        APP_CONFIG["auto_update_games"] = is_on
+        save_config()
+        
+        if is_on:
+            show_push_notification("Đã BẬT tự động cập nhật", "info")
+            # Kích hoạt quét ngay lập tức
+            threading.Thread(target=process_game_updates_thread, daemon=True).start()
+        else:
+            show_push_notification("Đã TẮT tự động cập nhật", "info")
+
+    # ----------------------------------------------------------------
+
+
+
+
+
+
+
+
     def toggle_settings_drawer(e=None):
         if settings_drawer.offset.x > 0: # --- MỞ SETTINGS ---
             settings_drawer.visible = True
@@ -1461,7 +1566,7 @@ def main(page: ft.Page):
 
 
 
-            
+
 
     def manual_check_update(e):
         # Cập nhật giao diện nút bấm
@@ -1523,6 +1628,23 @@ def main(page: ft.Page):
              time.sleep(2)
              btn_system_check.text = "Kiểm tra cập nhật"
         btn_system_check.update()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     # Tạo nút bấm
     btn_system_check = ft.ElevatedButton(
@@ -1607,54 +1729,82 @@ def main(page: ft.Page):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     # --- [PHẦN 2] GIAO DIỆN SIDEBAR ---
     settings_drawer = ft.Container(
-        width=770, 
-        bgcolor="#991E1E1E",
+        width=380, # [Update] Thu nhỏ bề ngang lại chút cho đẹp (Cũ là 770 quá to)
+        bgcolor="#CC1E1E1E", # Màu tối hơn chút
         blur=ft.Blur(20, 20, ft.BlurTileMode.MIRROR),
         right=0, top=0, bottom=0,
         offset=ft.Offset(1.1, 0), 
         visible=False,
         animate_offset=ft.Animation(600, "easeOutQuart"), 
-        padding=40, shadow=ft.BoxShadow(blur_radius=50, color="#000000"),
+        padding=30, shadow=ft.BoxShadow(blur_radius=50, color="#000000"),
+        
         content=ft.Column([
             ft.Row([
-                ft.Text("CÀI ĐẶT HỆ THỐNG", size=30, weight="bold"),
+                ft.Text("CÀI ĐẶT", size=24, weight="bold"), # Chữ nhỏ lại xíu
                 ft.Container(expand=True),
                 ft.IconButton(ft.icons.CLOSE, on_click=toggle_settings_drawer)
             ]),
-            ft.Divider(), 
-            ft.Container(height=20),
-            ft.Switch(label="Khởi động cùng Windows", value=check_startup_status(), on_change=on_startup_change),
-            ft.Container(height=10), 
-            ft.Switch(label="Âm thanh hiệu ứng", value=True),
-            ft.Container(height=10),
-            ft.Switch(
-                label="Hiện tọa độ chuột (Dev)", 
-                value=False, 
-                # [FIX] Gọi hàm start_coord_tracking thay vì lambda cũ
-                on_change=lambda e: start_coord_tracking(e.control.value)
-            ),
-            ft.Container(height=20),
+            ft.Divider(height=10, color="grey"), 
             
-            # Nút đổi hình nền (Cũ)
+            # --- CỤM CÔNG TẮC (GOM GỌN) ---
+            ft.Column([
+                ft.Switch(label="Khởi động cùng Windows", value=check_startup_status(), on_change=on_startup_change),
+                ft.Container(height=5), # Khoảng cách nhỏ 5px
+                
+                ft.Switch(label="Âm thanh hiệu ứng", value=True),
+                ft.Container(height=5), 
+
+                # Nút Update mới thêm vào (Nằm ngay dưới)
+                ft.Switch(
+                    label="Tự động check Update Game", 
+                    value=APP_CONFIG.get("auto_update_games", False), 
+                    on_change=on_auto_update_switch
+                ),
+                ft.Container(height=5), 
+
+                ft.Switch(
+                    label="Hiện tọa độ chuột (Dev)", 
+                    value=False, 
+                    on_change=lambda e: start_coord_tracking(e.control.value)
+                ),
+            ], spacing=0),
+            
+            ft.Container(height=20), # Cách ra 1 đoạn để đến nút bấm
+
+            # --- CỤM NÚT BẤM ---
             ft.ElevatedButton(
                 "Đổi Hình Nền Launcher", 
                 icon=ft.icons.IMAGE, 
-                bgcolor="#333333", 
-                color="white",
-                height=45,
-                width=300, 
-                on_click=lambda _: page.overlay[0].pick_files(allowed_extensions=["png", "jpg", "jpeg"])
+                bgcolor="#333333", color="white",
+                height=45, width=300, 
+                on_click=lambda _: file_picker.pick_files(allowed_extensions=["png", "jpg", "jpeg"])
             ),
 
-            # [CHÈN NÚT KIỂM TRA VÀO ĐÂY]
             ft.Container(height=10),
-            btn_system_check, # <--- CHỈ VIẾT TÊN BIẾN Ở ĐÂY THÔI
-            # ---------------------------
+            
+            btn_system_check, # Nút kiểm tra cập nhật App
 
             ft.Container(expand=True), 
-            ft.Text("Conist Launcher v2.0", italic=True, color="grey")
+            ft.Text("Conist Link Launcher v2.0", italic=True, color="grey", size=12)
         ])
     )
 
@@ -3058,6 +3208,7 @@ def main(page: ft.Page):
         # ----------------------------------------------------
     )
 # --- SETUP FILE PICKER ---
+    # --- SETUP FILE PICKER (CHO BACKGROUND) ---
     def pick_bg_result(e: ft.FilePickerResultEvent):
         if e.files:
             path = e.files[0].path
@@ -3066,6 +3217,10 @@ def main(page: ft.Page):
             bg_container.image = ft.DecorationImage(src=path, fit=ft.ImageFit.COVER)
             bg_container.gradient = None 
             bg_container.update()
+    
+    # [THÊM ĐOẠN NÀY] Khởi tạo và đưa vào Overlay
+    file_picker = ft.FilePicker(on_result=pick_bg_result)
+    page.overlay.append(file_picker)
     # --- IDLE MODE ---
     IDLE_TIMEOUT = 300 
     state = {
@@ -3556,23 +3711,66 @@ def main(page: ft.Page):
         except Exception: pass
         return has_new
 
-    # --- MAIN THREAD: Quản lý 8 luồng ---
+    # --- TURBO V3: TỐC ĐỘ ÁNH SÁNG (NO DELAY) ---
     def bg_download_icons():
-        time.sleep(2)
-        print(f"[TURBO] Đang kiểm tra {len(GAME_LIST)} game (Đa luồng)...")
+        # [TỐI ƯU 1] Bỏ time.sleep(2) -> Chạy ngay lập tức
+        print(f"[FLASH] Bắt đầu quét {len(GAME_LIST)} game...")
         
+        # [TỐI ƯU 2] Quét thư mục 1 lần duy nhất (Nhanh gấp 100 lần check từng file)
+        try:
+            existing_files = set(os.listdir(ICON_FOLDER)) # Tạo danh sách các file đang có
+        except:
+            existing_files = set()
+
+        missing_games = []
         changed = False
-        # Chạy 8 luồng song song
+
+        # --- GIAI ĐOẠN 1: CHECK NHANH (Main Thread) ---
+        for g in GAME_LIST:
+            slug = clean_name_for_slug(g['name'])
+            target_filename = f"{slug}.jpg"
+            local_path = os.path.join(ICON_FOLDER, target_filename)
+
+            # Check xem file có trong danh sách đã quét không?
+            if target_filename in existing_files:
+                # Nếu có file -> Check nhanh dung lượng (tránh file rác)
+                # Thao tác này cực nhanh, không đáng kể
+                if os.path.getsize(local_path) > 1024:
+                    # File ngon -> Update RAM và UI ngay lập tức
+                    if g.get('icon') != local_path:
+                        g['icon'] = local_path
+                        # Update UI
+                        try:
+                            for card in grid.controls:
+                                if card.game['name'] == g['name']:
+                                    # Chỉ update nếu src khác nhau để đỡ giật
+                                    if card.img_control.src != local_path:
+                                        card.img_control.src = local_path
+                                        card.img_control.update()
+                                    break
+                        except: pass
+                    continue # Bỏ qua, không cần tải
+            
+            # Nếu chạy xuống đây nghĩa là thiếu file hoặc file lỗi
+            missing_games.append(g)
+
+        # --- GIAI ĐOẠN 2: CHỈ TẢI CÁI THIẾU (Đa luồng) ---
+        if not missing_games:
+            print("[FLASH] ✅ Full ảnh. Không tốn 1 giọt RAM nào để tải.")
+            return
+
+        print(f"[FLASH] ⚡ Phát hiện {len(missing_games)} game thiếu ảnh. Kích hoạt Đa luồng...")
+        
+        # Chỉ khởi động luồng cho những game cần thiết
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            results = executor.map(process_single_icon, GAME_LIST)
+            # Tận dụng lại hàm process_single_icon cũ (Worker)
+            results = executor.map(process_single_icon, missing_games)
             for res in results:
                 if res: changed = True
         
         if changed:
-            print("[TURBO] Đã cập nhật xong ảnh mới. Lưu Cache.")
+            print("[FLASH] Đã cập nhật xong cache.")
             save_cache()
-        else:
-            print("[TURBO] Tất cả ảnh đã đầy đủ. Không cần tải.")
 
 
 
@@ -3584,6 +3782,29 @@ def main(page: ft.Page):
 
     threading.Thread(target=idle_checker, daemon=True).start()
     threading.Thread(target=bg_download_icons, daemon=True).start()
+
+    if APP_CONFIG.get("auto_update_games", False):
+        # [cite_start]Lúc này đang ở trong hàm main nên nó mới nhìn thấy process_game_updates_thread [cite: 99]
+        threading.Thread(target=process_game_updates_thread, daemon=True).start()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
 
