@@ -16,7 +16,30 @@ import shutil
 import asyncio
 import ctypes
 import time
+import concurrent.futures 
 
+
+
+
+
+
+
+
+
+
+
+
+
+def get_base_path():
+    """Hàm lấy đường dẫn gốc (Dual Mode)"""
+    # 1. Nếu là file EXE đã đóng gói (Frozen)
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    
+    # 2. Nếu là chạy Code (VS Code/Terminal)
+    else:
+        # [QUAN TRỌNG] Lấy đường dẫn của chính file code này
+        return os.path.dirname(os.path.abspath(__file__))
 
 
 # [UPGRADE] Định nghĩa lại cấu trúc API chuẩn xác hơn
@@ -179,11 +202,6 @@ def create_desktop_shortcut(target_path, icon_path):
 
 
 
-def get_base_path():
-    """Luôn lấy đường dẫn của file EXE đang chạy"""
-    # Vì bootstrap.py đóng gói thành EXE nên sys.executable chính là file chạy
-    return os.path.dirname(sys.executable)
-
 # Tên thư mục dữ liệu
 DATA_DIR_NAME = "Launcher_Data"
 
@@ -196,7 +214,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.1"
+CURRENT_VERSION = "2.0.0"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -539,7 +557,7 @@ def get_lnd_image(lnd_url):
 
 def download_icon(img_url, save_path):
     try:
-        # [QUAN TRỌNG] Đổi đuôi file save_path từ .png thành .jpg để tránh nhầm lẫn
+        # [QUAN TRỌNG] Luôn ép đuôi file thành .jpg
         if save_path.endswith(".png"):
             save_path = save_path.replace(".png", ".jpg")
 
@@ -548,36 +566,27 @@ def download_icon(img_url, save_path):
             'Referer': 'https://linkneverdie.net/'
         }
         
-        response = requests.get(img_url, headers=headers, stream=True, timeout=15)
+        response = requests.get(img_url, headers=headers, stream=True, timeout=10)
         
         if response.status_code == 200:
             img = Image.open(response.raw)
             
-            # 1. Xử lý ảnh (Cắt vuông)
+            # Xử lý ảnh
+            if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+            
             w, h = img.size
             min_d = min(w, h)
-            left = (w - min_d)//2
-            top = (h - min_d)//2
+            left, top = (w - min_d)//2, (h - min_d)//2
             img = img.crop((left, top, left+min_d, top+min_d))
             img = img.resize((150, 150), Image.Resampling.LANCZOS)
             
-            # 2. [TỐI ƯU HÓA] Chuyển sang JPG
-            # JPG không hỗ trợ nền trong suốt (Alpha), nên phải chuyển sang RGB nền trắng/đen
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            
-            # 3. Lưu với chất lượng 80-85% (Cực nhẹ)
+            # Lưu đè file cũ
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            img.save(save_path, "JPEG", quality=80, optimize=True)
-            
-            print(f"[DOWNLOAD] Đã lưu icon (Tối ưu): {save_path}")
+            img.save(save_path, "JPEG", quality=85)
             return True
-        else:
-            print(f"[DOWNLOAD FAIL] Code {response.status_code}")
-            return False
-            
+        return False
     except Exception as e: 
-        print(f"[DOWNLOAD ERROR] {e}")
+        # print(f"Lỗi tải: {e}")
         return False
 
 def fetch_full_details(url):
@@ -822,24 +831,40 @@ class SplashLoader:
 def main(page: ft.Page):
     cleanup_old_versions()
     
-    # 1. XÁC ĐỊNH ĐƯỜNG DẪN CƠ BẢN (Dùng chung cho cả App)
+    # 1. Lấy đường dẫn gốc (Lúc này nó sẽ trỏ đúng về Desktop/Conist Link)
+    base_dir = get_base_path()
+    
+    # Debug xem nó đã trỏ đúng chưa
+    print(f"[PATH] Base Dir: {base_dir}")
+
+    # 2. Định nghĩa các đường dẫn quan trọng
+    icon_path = os.path.join(base_dir, "Launcher_Data", "app_icon.ico")
+    
+    # Định nghĩa exe_path (để tránh lỗi undefined phía dưới)
     if getattr(sys, 'frozen', False):
         exe_path = sys.executable
-        base_dir = os.path.dirname(exe_path)
     else:
-        exe_path = sys.executable
-        base_dir = get_base_path()
+        exe_path = sys.executable 
 
-    # Đường dẫn icon chuẩn trong Launcher_Data
-    # (Đây là nơi file Vỏ đã giải nén icon ra)
-    icon_path = os.path.join(base_dir, "Launcher_Data", "app_icon.ico")
+    # 3. SET ICON CỬA SỔ
+    if os.path.exists(icon_path):
+        page.window.icon = icon_path
+        print(f"[ICON] Đã tìm thấy: {icon_path}")
+    else:
+        # Thử tìm file icon nằm lẻ bên ngoài (dự phòng)
+        fallback = os.path.join(base_dir, "app_icon.ico")
+        if os.path.exists(fallback):
+            page.window.icon = fallback
+            print(f"[ICON] Dùng icon dự phòng: {fallback}")
+        else:
+            print(f"[ICON ERROR] Vẫn chưa thấy icon đâu cả!")
 
-    # 2. FIX ICON TASKBAR (App ID)
+    # 4. SET APP ID (Taskbar)
     try:
-        # ID này giúp Windows nhận diện cửa sổ và gom nhóm icon đúng
         myappid = 'conist.link.launcher.v2.live' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
+    
 
     # 3. SET ICON CHO CỬA SỔ APP
     if os.path.exists(icon_path):
@@ -3485,55 +3510,71 @@ def main(page: ft.Page):
     # Bắt đầu quy trình khởi động
     page.run_task(run_startup)
 
-    # --- CÁC LUỒNG CHẠY NGẦM ---
-    def bg_download_icons():
-        # Chờ 3 giây để đảm bảo Grid đã được vẽ xong
-        time.sleep(3)
-        print(f"[ICON THREAD] Bắt đầu quét. Tổng số game trong list: {len(GAME_LIST)}")
-        
-        changed = False
-        for g in GAME_LIST:
+    # --- WORKER: Xử lý 1 game ---
+    def process_single_icon(g):
+        has_new = False
+        try:
             slug = clean_name_for_slug(g['name'])
-            local_icon_path = os.path.join(ICON_FOLDER, f"{slug}.png")
+            # [QUAN TRỌNG] Chỉ tìm file .jpg
+            local_path = os.path.join(ICON_FOLDER, f"{slug}.jpg")
             
-            # Kiểm tra: Nếu chưa có file hoặc file bị lỗi (0KB) thì tải
-            is_missing = not os.path.exists(local_icon_path)
-            is_corrupted = os.path.exists(local_icon_path) and os.path.getsize(local_icon_path) < 1024 
-            has_link = g.get('lnd_url') is not None and len(str(g.get('lnd_url'))) > 5
+            # Logic kiểm tra file
+            # 1. Chưa có file
+            # 2. Hoặc file bị hỏng (0KB)
+            should_download = not os.path.exists(local_path) or os.path.getsize(local_path) < 1024
+            
+            has_link = g.get('lnd_url') and len(str(g.get('lnd_url'))) > 10
 
-            if (is_missing or is_corrupted) and has_link:
-                print(f"✅ [TẢI] {g['name']} -> Đang xử lý...")
+            if should_download and has_link:
+                # print(f"⬇️ [ĐANG TẢI] {g['name']}...") # Bỏ comment nếu muốn xem chi tiết
                 
-                # 1. Lấy link và Tải về
                 img_url = get_lnd_image(g['lnd_url'])
-                if img_url and download_icon(img_url, local_icon_path):
-                    g['icon'] = local_icon_path
-                    changed = True
+                if img_url and download_icon(img_url, local_path):
+                    g['icon'] = local_path
+                    has_new = True
                     
-                    # 2. CẬP NHẬT UI REALTIME (Đã fix lỗi đường dẫn)
+                    # Update UI ngay lập tức (Thread Safe)
                     try:
-                        # Tìm thẻ game tương ứng trong Grid
                         for card in grid.controls:
                             if card.game['name'] == g['name']:
-                                # [FIX QUAN TRỌNG] Chỉ dùng đường dẫn gốc, KHÔNG thêm ?t=...
-                                card.img_control.src = local_icon_path
-                                
-                                # Tạo hiệu ứng chớp nhẹ để báo hiệu đã cập nhật
-                                card.img_control.opacity = 0.5
+                                card.img_control.src = local_path
                                 card.img_control.update()
-                                time.sleep(0.1)
-                                card.img_control.opacity = 1
-                                card.img_control.update()
-                                
-                                # Cập nhật luôn cái status (nếu cần)
-                                # card.status_txt.update()
                                 break
-                    except Exception as e:
-                        print(f"Lỗi update UI: {e}")
-                else:
-                    print(f"❌ [LỖI] Không tải được ảnh cho: {g['name']}")
+                    except: pass
+            else:
+                # Nếu đã có ảnh, đảm bảo đường dẫn trong RAM đúng là file .jpg đó
+                if os.path.exists(local_path):
+                     g['icon'] = local_path
+                     # Cập nhật ngược lại vào UI nếu đang hiển thị sai
+                     try:
+                        for card in grid.controls:
+                            if card.game['name'] == g['name'] and card.img_control.src != local_path:
+                                card.img_control.src = local_path
+                                card.img_control.update()
+                     except: pass
 
-        if changed: save_cache()
+        except Exception: pass
+        return has_new
+
+    # --- MAIN THREAD: Quản lý 8 luồng ---
+    def bg_download_icons():
+        time.sleep(2)
+        print(f"[TURBO] Đang kiểm tra {len(GAME_LIST)} game (Đa luồng)...")
+        
+        changed = False
+        # Chạy 8 luồng song song
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            results = executor.map(process_single_icon, GAME_LIST)
+            for res in results:
+                if res: changed = True
+        
+        if changed:
+            print("[TURBO] Đã cập nhật xong ảnh mới. Lưu Cache.")
+            save_cache()
+        else:
+            print("[TURBO] Tất cả ảnh đã đầy đủ. Không cần tải.")
+
+
 
     def idle_checker():
         while True:
