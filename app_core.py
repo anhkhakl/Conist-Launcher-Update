@@ -196,7 +196,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.1"
+CURRENT_VERSION = "2.0.0"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -506,32 +506,70 @@ def fetch_lnd_version(lnd_url):
         return "Error"
 
 def get_lnd_image(lnd_url):
+    """Hàm lấy ảnh bìa LND: Ưu tiên ID 'wallpaper_img' chuẩn xác"""
     if not lnd_url: return None
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(lnd_url, headers=headers, timeout=5)
+        # Headers giả lập Chrome để tránh bị chặn khi cào web
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://linkneverdie.net/'
+        }
+        response = requests.get(lnd_url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # --- CÁCH 1 (ƯU TIÊN): Tìm theo ID 'wallpaper_img' ---
+        # HTML: <img id="wallpaper_img" src="/Assets/Imgs/Post/..." >
+        target_img = soup.find('img', id='wallpaper_img')
+        
+        if target_img:
+            src = target_img.get('src')
+            if src:
+                # Nếu link dạng tương đối (/Assets/...) -> Ghép thêm domain
+                if src.startswith("/"):
+                    return "https://linkneverdie.net" + src
+                return src
+
+        # --- CÁCH 2 (DỰ PHÒNG): Tìm theo Meta Tag ---
         meta = soup.find('meta', property='og:image')
         if meta: return meta.get('content')
-        meta_tw = soup.find('meta', property='twitter:image')
-        if meta_tw: return meta_tw.get('content')
-    except: pass
+        
+    except Exception as e: 
+        print(f"[GET IMG ERROR] {e}")
     return None
 
 def download_icon(img_url, save_path):
     try:
-        response = requests.get(img_url, stream=True, timeout=10)
-        img = Image.open(response.raw)
-        w, h = img.size
-        min_d = min(w, h)
-        left = (w - min_d)//2
-        top = (h - min_d)//2
-        img = img.crop((left, top, left+min_d, top+min_d))
-        img = img.resize((150, 150), Image.Resampling.LANCZOS)
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        img.save(save_path, "PNG")
-        return True
-    except: return False
+        # [QUAN TRỌNG] Headers để vượt qua cơ chế chống Bot
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://linkneverdie.net/'
+        }
+        
+        # Stream=True để tải file lớn an toàn hơn
+        response = requests.get(img_url, headers=headers, stream=True, timeout=15)
+        
+        if response.status_code == 200:
+            # Xử lý ảnh bằng PIL (Cắt hình vuông)
+            img = Image.open(response.raw)
+            w, h = img.size
+            min_d = min(w, h)
+            left = (w - min_d)//2
+            top = (h - min_d)//2
+            img = img.crop((left, top, left+min_d, top+min_d))
+            img = img.resize((150, 150), Image.Resampling.LANCZOS)
+            
+            # Lưu file
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            img.save(save_path, "PNG")
+            print(f"[DOWNLOAD] Đã lưu icon: {save_path}")
+            return True
+        else:
+            print(f"[DOWNLOAD FAIL] Code {response.status_code} - Link: {img_url}")
+            return False
+            
+    except Exception as e: 
+        print(f"[DOWNLOAD ERROR] {e}")
+        return False
 
 def fetch_full_details(url):
     if not url: return None
@@ -3305,9 +3343,10 @@ def main(page: ft.Page):
 
     page.add(main_layout)
 
-    # --- 9. LOGIC KHỞI ĐỘNG (ĐÃ FIX ANIMATION UPDATE MƯỢT MÀ) ---
+    # --- 9. LOGIC KHỞI ĐỘNG (FIX LỖI KHÔNG CẬP NHẬT DATA) ---
     async def run_startup():
         global RAW_GAME_DATA
+        
         # 1. Chạy hiệu ứng Loading Splash
         await splash.animate_loading()
         
@@ -3316,68 +3355,51 @@ def main(page: ft.Page):
         main_layout.opacity = 1
         page.update()
 
-        # 3. [ƯU TIÊN] CHẠY FIX MÀN HÌNH ĐEN TRƯỚC (Để UI ổn định hẳn)
-        # Chỉ thay đổi kích thước nhẹ để ép vẽ lại, TUYỆT ĐỐI KHÔNG dùng .center()
+        # 3. Fix kích thước (Chống màn hình đen)
+        # (Giữ nguyên đoạn nhích nhẹ 1px cũ của bạn ở đây...)
         current_w = page.window.width
         current_h = page.window.height
-        
-        # Nhích nhẹ 1 pixel
         page.window.width = current_w + 1
         page.window.height = current_h + 1
         page.update()
-        
-        await asyncio.sleep(0.05) # Nghỉ cực ngắn
-        
-        # Trả về kích thước cũ (1280x720)
-        page.window.width = 1280
-        page.window.height = 720
-        page.update()
-        
-        await asyncio.sleep(0.1)
-        
+        await asyncio.sleep(0.05)
         page.window.width = 1280
         page.window.height = 720
         page.window.center()
         page.update()
         
-        await asyncio.sleep(0.1) # Nghỉ một nhịp cho UI thở
-        
-        # Trả về kích thước chuẩn lần cuối
-        page.window.width = 1280
-        page.window.height = 720
-        page.update()
-        # --- [QUAN TRỌNG] KIỂM TRA VÀ TẢI DATA ---
-        if not os.path.exists(LOCAL_DATA_PATH):
-            # ... (Đoạn đổi chữ Splash giữ nguyên) ...
-            splash.msg_txt.value = "Lần đầu chạy - Đang tải danh sách game..."
-            splash.progress_bar.color = "orange"
-            splash.page.update()
-            
-            # Tải dữ liệu
-            success = await asyncio.to_thread(download_data_direct)
-            
-            if success:
-                splash.msg_txt.value = "Tải xong! Đang khởi tạo..."
-            else:
-                splash.msg_txt.value = "Tải lỗi! Dùng dữ liệu mẫu."
-            splash.page.update()
-            await asyncio.sleep(0.5)
+        # --- [FIX QUAN TRỌNG] TẢI DATA MỚI NHẤT TỪ GITHUB ---
+        print("[STARTUP] Bắt đầu đồng bộ dữ liệu...")
+        splash.msg_txt.value = "Đang cập nhật danh sách game..."
+        splash.page.update()
 
-        # --- [MẤU CHỐT Ở ĐÂY] NẠP DỮ LIỆU MỚI VÀO RAM VÀ GRID ---
+        # Gọi hàm tải trực tiếp (Bắt buộc tải lại để lấy list mới)
+        success = await asyncio.to_thread(download_data_direct)
+        
+        if success:
+            print("[STARTUP] Đã tải xong raw_games.txt mới nhất.")
+        else:
+            print("[STARTUP] Tải thất bại, dùng dữ liệu cũ.")
+
+        # --- NẠP DỮ LIỆU VÀO RAM ---
         if os.path.exists(LOCAL_DATA_PATH):
             try:
-                print("[STARTUP] Đang nạp dữ liệu mới vào Grid...")
                 with open(LOCAL_DATA_PATH, "r", encoding="utf-8") as f:
-                    RAW_GAME_DATA = ast.literal_eval(f.read())
+                    content = f.read()
+                    RAW_GAME_DATA = ast.literal_eval(content)
                 
-                # GỌI HÀM CẬP NHẬT GIAO DIỆN NGAY LẬP TỨC
+                print(f"[STARTUP] Đã nạp {len(RAW_GAME_DATA)} game vào hệ thống.")
+                
+                # Cập nhật giao diện Grid ngay lập tức
                 refresh_data_and_grid() 
                 
             except Exception as e: 
-                print(f"Lỗi nạp data: {e}")
+                print(f"[STARTUP] Lỗi đọc file data: {e}")
         
-        # Kích hoạt luồng check update ngầm
-        threading.Thread(target=background_check_update, daemon=True).start()
+        # --- Kích hoạt luồng tải ảnh ---
+        # (Sau khi đã có danh sách game đầy đủ)
+        threading.Thread(target=bg_download_icons, daemon=True).start()
+        
 
         # ---------------------------------------------------
 
@@ -3463,14 +3485,52 @@ def main(page: ft.Page):
 
     # --- CÁC LUỒNG CHẠY NGẦM ---
     def bg_download_icons():
+        # Chờ 3 giây để đảm bảo Grid đã được vẽ xong
+        time.sleep(3)
+        print(f"[ICON THREAD] Bắt đầu quét. Tổng số game trong list: {len(GAME_LIST)}")
+        
         changed = False
         for g in GAME_LIST:
-            if not os.path.exists(g['icon']) and g['lnd_url']:
+            slug = clean_name_for_slug(g['name'])
+            local_icon_path = os.path.join(ICON_FOLDER, f"{slug}.png")
+            
+            # Kiểm tra: Nếu chưa có file hoặc file bị lỗi (0KB) thì tải
+            is_missing = not os.path.exists(local_icon_path)
+            is_corrupted = os.path.exists(local_icon_path) and os.path.getsize(local_icon_path) < 1024 
+            has_link = g.get('lnd_url') is not None and len(str(g.get('lnd_url'))) > 5
+
+            if (is_missing or is_corrupted) and has_link:
+                print(f"✅ [TẢI] {g['name']} -> Đang xử lý...")
+                
+                # 1. Lấy link và Tải về
                 img_url = get_lnd_image(g['lnd_url'])
-                if img_url:
-                    slug = clean_name_for_slug(g['name'])
-                    save_p = f"{ICON_FOLDER}/{slug}.png"
-                    if download_icon(img_url, save_p): g['icon'] = save_p; changed = True
+                if img_url and download_icon(img_url, local_icon_path):
+                    g['icon'] = local_icon_path
+                    changed = True
+                    
+                    # 2. CẬP NHẬT UI REALTIME (Đã fix lỗi đường dẫn)
+                    try:
+                        # Tìm thẻ game tương ứng trong Grid
+                        for card in grid.controls:
+                            if card.game['name'] == g['name']:
+                                # [FIX QUAN TRỌNG] Chỉ dùng đường dẫn gốc, KHÔNG thêm ?t=...
+                                card.img_control.src = local_icon_path
+                                
+                                # Tạo hiệu ứng chớp nhẹ để báo hiệu đã cập nhật
+                                card.img_control.opacity = 0.5
+                                card.img_control.update()
+                                time.sleep(0.1)
+                                card.img_control.opacity = 1
+                                card.img_control.update()
+                                
+                                # Cập nhật luôn cái status (nếu cần)
+                                # card.status_txt.update()
+                                break
+                    except Exception as e:
+                        print(f"Lỗi update UI: {e}")
+                else:
+                    print(f"❌ [LỖI] Không tải được ảnh cho: {g['name']}")
+
         if changed: save_cache()
 
     def idle_checker():
