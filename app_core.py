@@ -196,7 +196,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.1"
+CURRENT_VERSION = "2.0.0"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -775,15 +775,36 @@ class SplashLoader:
 
 def main(page: ft.Page):
     cleanup_old_versions()
-    # --- [BƯỚC 1] BUNG FILE RA TRƯỚC ---
     
-    # --- [BƯỚC 2] FIX LỖI ICON TASKBAR ---
+    # --- FIX LỖI ICON TASKBAR ---
     try:
         myappid = 'conist.link.launcher.v2.dev' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
 
-    # --- [BƯỚC 3] XÁC ĐỊNH ICON CHUẨN (Fix lỗi Exists False) ---
+    # --- [FIX QUAN TRỌNG] TẠO SHORTCUT ---
+    # Logic: Luôn tạo shortcut trỏ về file EXE đang chạy (cái Vỏ)
+    try:
+        if getattr(sys, 'frozen', False):
+            # Lấy đường dẫn file EXE (Vỏ)
+            exe_path = sys.executable
+            
+            # Lấy icon từ thư mục Data (đã được Vỏ giải nén ra)
+            base_dir = os.path.dirname(exe_path)
+            icon_path = os.path.join(base_dir, "Launcher_Data", "app_icon.ico")
+            
+            # Nếu không thấy icon trong Data thì dùng icon mặc định của hệ thống
+            if not os.path.exists(icon_path):
+                icon_path = exe_path 
+
+            # Gọi hàm tạo shortcut
+            create_desktop_shortcut(exe_path, icon_path)
+            print(f"[SHORTCUT] Đã kiểm tra/tạo shortcut cho: {exe_path}")
+    except Exception as e:
+        print(f"[SHORTCUT] Lỗi tạo shortcut: {e}")
+
+    # --- TIẾP TỤC CODE CŨ ---
+    # (Phần xác định icon cho cửa sổ app giữ nguyên)
     icon_path_1 = os.path.join(BASE_DATA_PATH, "app_icon.ico")
     icon_path_2 = os.path.join(get_base_path(), "app_icon.ico")
     
