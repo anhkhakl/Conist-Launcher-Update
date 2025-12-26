@@ -225,7 +225,7 @@ def check_and_extract_resources():
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.1"
+CURRENT_VERSION = "2.0.0"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -1336,42 +1336,55 @@ def main(page: ft.Page):
 
     # Trong app_core.py
 
-    def start_self_update(url, version):
+    def start_self_update(url, version): # Hàm update code lõi
         try:
-            # 1. Link tải file code mới (Dạng RAW text)
+            # 1. Link GitHub Raw
             url_code = "https://raw.githubusercontent.com/anhkhakl/Conist-Launcher-Update/main/app_core.py"
             
-            # 2. Tải về
             show_push_notification("Đang tải bản cập nhật lõi...", "loading")
+            
             res = requests.get(url_code)
             
             if res.status_code == 200:
                 new_code = res.text
                 
-                # 3. Lấy vị trí file app_core.py hiện tại
-                # (Vì đang chạy dynamic, __file__ có thể sai, nên dùng os.getcwd hoặc sys.executable)
                 import sys
+                import ctypes
+                
+                # Xác định đường dẫn gốc
                 if getattr(sys, 'frozen', False):
                     base_dir = os.path.dirname(sys.executable)
                 else:
                     base_dir = os.path.dirname(os.path.abspath(__file__))
-                    
-                core_path = os.path.join(base_dir, "app_core.py")
                 
-                # 4. Ghi đè file code (Thao tác này Windows KHÔNG CẤM)
+                # [THAY ĐỔI QUAN TRỌNG] Trỏ đúng vào chỗ giấu file: Launcher_Data/icons/app_core.py
+                core_path = os.path.join(base_dir, "Launcher_Data", "icons", "app_core.py")
+                
+                # 2. Hiện file lên để ghi (Bỏ thuộc tính Hidden/System)
+                FILE_ATTRIBUTE_NORMAL = 0x80
+                ctypes.windll.kernel32.SetFileAttributesW(core_path, FILE_ATTRIBUTE_NORMAL)
+                
+                # 3. Ghi đè code mới
                 with open(core_path, "w", encoding="utf-8") as f:
                     f.write(new_code)
-                    
-                # 5. Lưu version mới
-                # (Bạn tự thêm logic lưu version vào file json ở đây)
                 
-                show_push_notification("Cập nhật xong! Đang khởi động lại...", "success")
+                # 4. Ẩn lại ngay lập tức (Hidden + System)
+                ctypes.windll.kernel32.SetFileAttributesW(core_path, 0x06)
+                
+                # 5. Lưu version
+                try:
+                    v_path = os.path.join(base_dir, "Launcher_Data", "version.json")
+                    with open(v_path, "w") as f:
+                        f.write(json.dumps({"latest_version": version}))
+                except: pass
+
+                show_push_notification("Cập nhật xong! Khởi động lại...", "success")
                 time.sleep(1)
                 
-                # 6. Khởi động lại App (Thực ra là khởi động lại cái Vỏ)
+                # 6. Restart nhanh (Gọi lại file Vỏ EXE)
                 import subprocess
                 subprocess.Popen([sys.executable])
-                sys.exit(0)
+                os._exit(0) 
                 
             else:
                 show_push_notification("Lỗi tải bản cập nhật", "error")
@@ -1379,6 +1392,23 @@ def main(page: ft.Page):
         except Exception as e:
             print(f"Lỗi update code: {e}")
             show_push_notification(f"Lỗi: {str(e)}", "error")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            
 
     def manual_check_update(e):
         # Cập nhật giao diện nút bấm
