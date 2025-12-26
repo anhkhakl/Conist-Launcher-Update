@@ -539,18 +539,21 @@ def get_lnd_image(lnd_url):
 
 def download_icon(img_url, save_path):
     try:
-        # [QUAN TRỌNG] Headers để vượt qua cơ chế chống Bot
+        # [QUAN TRỌNG] Đổi đuôi file save_path từ .png thành .jpg để tránh nhầm lẫn
+        if save_path.endswith(".png"):
+            save_path = save_path.replace(".png", ".jpg")
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://linkneverdie.net/'
         }
         
-        # Stream=True để tải file lớn an toàn hơn
         response = requests.get(img_url, headers=headers, stream=True, timeout=15)
         
         if response.status_code == 200:
-            # Xử lý ảnh bằng PIL (Cắt hình vuông)
             img = Image.open(response.raw)
+            
+            # 1. Xử lý ảnh (Cắt vuông)
             w, h = img.size
             min_d = min(w, h)
             left = (w - min_d)//2
@@ -558,13 +561,19 @@ def download_icon(img_url, save_path):
             img = img.crop((left, top, left+min_d, top+min_d))
             img = img.resize((150, 150), Image.Resampling.LANCZOS)
             
-            # Lưu file
+            # 2. [TỐI ƯU HÓA] Chuyển sang JPG
+            # JPG không hỗ trợ nền trong suốt (Alpha), nên phải chuyển sang RGB nền trắng/đen
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            
+            # 3. Lưu với chất lượng 80-85% (Cực nhẹ)
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            img.save(save_path, "PNG")
-            print(f"[DOWNLOAD] Đã lưu icon: {save_path}")
+            img.save(save_path, "JPEG", quality=80, optimize=True)
+            
+            print(f"[DOWNLOAD] Đã lưu icon (Tối ưu): {save_path}")
             return True
         else:
-            print(f"[DOWNLOAD FAIL] Code {response.status_code} - Link: {img_url}")
+            print(f"[DOWNLOAD FAIL] Code {response.status_code}")
             return False
             
     except Exception as e: 
@@ -586,8 +595,8 @@ def fetch_full_details(url):
             ver_info = ver_p.find_next_sibling('p', class_='info')
             if ver_info: data['web_version'] = ver_info.text.strip()
 
-        # 2. Lấy Cấu hình (Gộp Tối thiểu & Khuyến nghị)
-        req_str = ""  # <--- [FIX] THÊM DÒNG NÀY ĐỂ KHỞI TẠO BIẾN
+        # 2. Lấy Cấu hình
+        req_str = ""
         cols = [('game_area_sys_req_leftCol', 'TỐI THIỂU'), ('game_area_sys_req_rightCol', 'KHUYẾN NGHỊ')]
         for cls, title in cols:
             col = soup.find('div', class_=cls)
@@ -597,43 +606,42 @@ def fetch_full_details(url):
                     req_str += li.get_text(strip=True) + "\n"
         data['requirements'] = req_str.strip() if req_str else "Không tìm thấy thông tin cấu hình."
 
-        # 3. [FIX] Lấy Album ảnh (Preview) - Lọc bỏ icon bé
-        # 3. [FIX] Lấy Album ảnh - Logic mới lấy toàn bộ ảnh trong bài
-        # 3. [FIX MỚI] Lấy Album ảnh - Chế độ "Ăn tạp" (Quét mọi ngóc ngách)
-        # 3. [FIX CHUẨN] Lấy Album ảnh theo nguồn trang bạn cung cấp
+        # 3. [UPDATE] Lấy Album ảnh (Logic 3 lớp)
         images = []
         
-        # Cách 1: Tìm đúng cái khung chứa screenshot (như trong HTML bạn gửi)
+        # --- LỚP 1: Tìm khung Gallery chuẩn (screenshots_div) ---
         screenshot_div = soup.find('div', id='screenshots_div')
-        
-        target_imgs = []
         if screenshot_div:
-            # Nếu tìm thấy khung chuẩn, chỉ lấy ảnh trong đó
             target_imgs = screenshot_div.find_all('img')
-        else:
-            # Nếu không thấy khung, tìm toàn bộ ảnh trong trang có alt chứa "Hình ảnh trong game"
-            target_imgs = soup.find_all('img', alt=re.compile(r'Hình ảnh trong game', re.I))
+            for img in target_imgs:
+                src = img.get('src') or img.get('data-src')
+                if src:
+                    if src.startswith("/"): src = "https://linkneverdie.net" + src
+                    if src not in images: images.append(src)
 
-        for img in target_imgs:
-            src = img.get('src') or img.get('data-src')
-            alt_txt = img.get('alt', '').lower()
+        # --- LỚP 2 (MỚI): Nếu Lớp 1 rỗng, quét ảnh trong nội dung bài viết ---
+        # Chỉ nhắm vào các ảnh do người viết bài chèn vào (thường có class fr-dib hoặc fr-draggable)
+        if not images:
+            print(f"[SCRAPE] Gallery rỗng, đang quét ảnh nội dung cho: {url}")
+            # Tìm tất cả ảnh có class chứa 'fr-' (đặc trưng của trình soạn thảo trên LND)
+            content_imgs = soup.find_all('img', class_=re.compile(r'(fr-dib|fr-draggable)'))
             
-            # Kiểm tra kỹ: Phải có src VÀ alt chứa từ khóa
-            if src and "hình ảnh trong game" in alt_txt:
-                # Xử lý đường dẫn tương đối (/Assets/...) thành tuyệt đối
-                if src.startswith("/"): 
-                    src = "https://linkneverdie.net" + src
-                
-                # Lọc bỏ ảnh trùng lặp ngay lập tức
-                if src not in images:
-                    images.append(src)
+            for img in content_imgs:
+                src = img.get('src') or img.get('data-src')
+                if src:
+                    if src.startswith("/"): src = "https://linkneverdie.net" + src
+                    
+                    # Lọc bớt các icon nhỏ hoặc ảnh rác (nếu cần)
+                    # Thường ảnh nội dung game sẽ không trùng lặp
+                    if src not in images:
+                        images.append(src)
 
-        # Fallback: Nếu vẫn không tìm được ảnh nào (trường hợp web đổi code), lấy ảnh bìa
+        # --- LỚP 3: Fallback lấy ảnh bìa (og:image) nếu vẫn trắng tay ---
         if not images:
             meta_img = soup.find('meta', property='og:image')
             if meta_img: images.append(meta_img.get('content'))
 
-        # Lấy tối đa 10 ảnh
+        # Lấy tối đa 10 ảnh để không làm nặng App
         data['album'] = images[:10]
 
         return data
@@ -814,61 +822,55 @@ class SplashLoader:
 def main(page: ft.Page):
     cleanup_old_versions()
     
-    # --- FIX LỖI ICON TASKBAR ---
+    # 1. XÁC ĐỊNH ĐƯỜNG DẪN CƠ BẢN (Dùng chung cho cả App)
+    if getattr(sys, 'frozen', False):
+        exe_path = sys.executable
+        base_dir = os.path.dirname(exe_path)
+    else:
+        exe_path = sys.executable
+        base_dir = get_base_path()
+
+    # Đường dẫn icon chuẩn trong Launcher_Data
+    # (Đây là nơi file Vỏ đã giải nén icon ra)
+    icon_path = os.path.join(base_dir, "Launcher_Data", "app_icon.ico")
+
+    # 2. FIX ICON TASKBAR (App ID)
     try:
-        myappid = 'conist.link.launcher.v2.dev' 
+        # ID này giúp Windows nhận diện cửa sổ và gom nhóm icon đúng
+        myappid = 'conist.link.launcher.v2.live' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
 
-    # --- [FIX QUAN TRỌNG] TẠO SHORTCUT ---
-    # Logic: Luôn tạo shortcut trỏ về file EXE đang chạy (cái Vỏ)
+    # 3. SET ICON CHO CỬA SỔ APP
+    if os.path.exists(icon_path):
+        page.window.icon = icon_path
+    else:
+        # Dự phòng: Nếu chưa có trong Data thì tìm ngay cạnh file chạy
+        fallback = os.path.join(base_dir, "app_icon.ico")
+        if os.path.exists(fallback):
+            page.window.icon = fallback
+        print(f"[ICON] Đang dùng icon: {page.window.icon}")
+
+    # 4. TẠO SHORTCUT (Chỉ chạy khi là file EXE)
     try:
         if getattr(sys, 'frozen', False):
-            # Lấy đường dẫn file EXE (Vỏ)
-            exe_path = sys.executable
+            # Nếu có icon ảnh thì dùng, không thì dùng icon của file EXE
+            shortcut_icon = icon_path if os.path.exists(icon_path) else exe_path
             
-            # Lấy icon từ thư mục Data (đã được Vỏ giải nén ra)
-            base_dir = os.path.dirname(exe_path)
-            icon_path = os.path.join(base_dir, "Launcher_Data", "app_icon.ico")
-            
-            # Nếu không thấy icon trong Data thì dùng icon mặc định của hệ thống
-            if not os.path.exists(icon_path):
-                icon_path = exe_path 
-
-            # Gọi hàm tạo shortcut
-            create_desktop_shortcut(exe_path, icon_path)
-            print(f"[SHORTCUT] Đã kiểm tra/tạo shortcut cho: {exe_path}")
+            # Gọi hàm tạo shortcut (đã sửa ở bước trước)
+            create_desktop_shortcut(exe_path, shortcut_icon)
+            print(f"[SHORTCUT] Đã kiểm tra/tạo shortcut.")
     except Exception as e:
         print(f"[SHORTCUT] Lỗi tạo shortcut: {e}")
 
-    # --- TIẾP TỤC CODE CŨ ---
-    # (Phần xác định icon cho cửa sổ app giữ nguyên)
-    icon_path_1 = os.path.join(BASE_DATA_PATH, "app_icon.ico")
-    icon_path_2 = os.path.join(get_base_path(), "app_icon.ico")
+    # --- TIẾP TỤC CODE CŨ (Xóa bớt phần check icon thừa phía dưới) ---
     
-    final_app_icon = None
-    if os.path.exists(icon_path_1): 
-        final_app_icon = icon_path_1
-    elif os.path.exists(icon_path_2): 
-        final_app_icon = icon_path_2
-        # Tiện tay copy vào Data luôn
-        try: shutil.copy2(icon_path_2, icon_path_1)
-        except: pass
-
-    if final_app_icon:
-        page.window.icon = final_app_icon
-    
-    # --- [BƯỚC 4] TỰ ĐỘNG TẠO SHORTCUT (CHỈ KHI CHẠY EXE) ---
-    if getattr(sys, 'frozen', False):
-        exe_path = sys.executable
-        if final_app_icon:
-            create_desktop_shortcut(exe_path, final_app_icon)
-    # --------------------------------------------------------
-
     global APP_CONFIG, file_picker, GAME_LIST
     
     # XÓA DANH SÁCH CŨ
     GAME_LIST.clear() 
+
+    # ... (Các phần sau giữ nguyên)
 
     # --- [FIX QUAN TRỌNG] HÀM NẠP LẠI DỮ LIỆU & VẼ LẠI GRID ---
     def refresh_data_and_grid():
@@ -3564,4 +3566,4 @@ if __name__ == "__main__":
         sys.exit(0)
     
     # 4. Nếu chưa chạy -> Chạy App bình thường
-    ft.app(target=main)
+    ft.app(target=main, assets_dir=BASE_DATA_PATH)
