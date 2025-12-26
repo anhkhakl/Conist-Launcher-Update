@@ -1306,11 +1306,9 @@ def main(page: ft.Page):
 
     # Trong app_core.py
 
-    def start_self_update(url, version): # Hàm update code lõi
+    def start_self_update(url, version):
         try:
-            # 1. Link GitHub Raw
             url_code = "https://raw.githubusercontent.com/anhkhakl/Conist-Launcher-Update/main/app_core.py"
-            
             show_push_notification("Đang tải bản cập nhật lõi...", "loading")
             
             res = requests.get(url_code)
@@ -1318,43 +1316,42 @@ def main(page: ft.Page):
             if res.status_code == 200:
                 new_code = res.text
                 
-                import sys
-                import ctypes
-                
-                # Xác định đường dẫn gốc
-                if getattr(sys, 'frozen', False):
-                    base_dir = os.path.dirname(sys.executable)
-                else:
-                    base_dir = os.path.dirname(os.path.abspath(__file__))
-                
-                # [THAY ĐỔI QUAN TRỌNG] Trỏ đúng vào chỗ giấu file: Launcher_Data/icons/app_core.py
+                # Xác định đường dẫn
+                base_dir = get_base_path()
                 core_path = os.path.join(base_dir, "Launcher_Data", "icons", "app_core.py")
                 
-                # 2. Hiện file lên để ghi (Bỏ thuộc tính Hidden/System)
+                # 1. Ghi đè code mới
+                import ctypes
                 FILE_ATTRIBUTE_NORMAL = 0x80
-                ctypes.windll.kernel32.SetFileAttributesW(core_path, FILE_ATTRIBUTE_NORMAL)
-                
-                # 3. Ghi đè code mới
+                try: ctypes.windll.kernel32.SetFileAttributesW(core_path, FILE_ATTRIBUTE_NORMAL)
+                except: pass
+
                 with open(core_path, "w", encoding="utf-8") as f:
                     f.write(new_code)
                 
-                # 4. Ẩn lại ngay lập tức (Hidden + System)
-                ctypes.windll.kernel32.SetFileAttributesW(core_path, 0x06)
+                try: ctypes.windll.kernel32.SetFileAttributesW(core_path, 0x06)
+                except: pass
                 
-                # 5. Lưu version
+                # 2. Lưu version
                 try:
                     v_path = os.path.join(base_dir, "Launcher_Data", "version.json")
                     with open(v_path, "w") as f:
                         f.write(json.dumps({"latest_version": version}))
                 except: pass
 
-                show_push_notification("Cập nhật xong! Khởi động lại...", "success")
+                show_push_notification("Cập nhật xong! Đang nạp lại...", "success")
                 time.sleep(1)
-                
-                # 6. Restart nhanh (Gọi lại file Vỏ EXE)
-                import subprocess
-                subprocess.Popen([sys.executable])
-                os._exit(0) 
+
+                # --- [THAY ĐỔI QUAN TRỌNG: SOFT RESTART] ---
+                # 3. Tạo tín hiệu Restart cho file Vỏ
+                restart_signal = os.path.join(base_dir, "Launcher_Data", "restart.signal")
+                with open(restart_signal, "w") as f:
+                    f.write("RESTART")
+
+                # 4. Đóng cửa sổ hiện tại
+                # Việc này sẽ kết thúc hàm ft.app() bên file bootstrap.py
+                # bootstrap.py sẽ thấy file restart.signal và chạy lại vòng lặp
+                page.window.close()
                 
             else:
                 show_push_notification("Lỗi tải bản cập nhật", "error")
