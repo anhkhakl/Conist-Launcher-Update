@@ -196,7 +196,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.0"
+CURRENT_VERSION = "2.0.1"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
