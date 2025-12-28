@@ -3006,19 +3006,53 @@ def main(page: ft.Page):
     # [FIX] 2. LOGIC HÌNH NỀN & CHẾ ĐỘ NGHỈ (IDLE MODE)
     # =================================================================
     
-    # A. Hình nền & File Picker
+    # =================================================================
+    # [FIX] 2. LOGIC HÌNH NỀN (ƯU TIÊN: CONFIG -> DEFAULT -> GRADIENT)
+    # =================================================================
+    
+    # 1. Lấy ảnh từ Cài đặt
     bg_img = APP_CONFIG.get("background")
+    
+    # 2. Kiểm tra ảnh Cài đặt có tồn tại không?
+    if bg_img and not os.path.exists(bg_img):
+        print(f"[BG] Ảnh cài đặt không tìm thấy: {bg_img}")
+        bg_img = None 
+        APP_CONFIG["background"] = None
+        save_config() # Xóa config lỗi để lần sau đỡ check lại
+
+    # 3. Nếu không có ảnh cài đặt (hoặc bị lỗi), tìm ảnh MẶC ĐỊNH
+    if not bg_img:
+        # Đường dẫn: .../Launcher_Data/default_bg.png
+        default_bg_path = os.path.join(BASE_DATA_PATH, "default_bg.png")
+        
+        if os.path.exists(default_bg_path):
+            print(f"[BG] Đang dùng ảnh mặc định: {default_bg_path}")
+            bg_img = default_bg_path
+        else:
+            print("[BG] Không tìm thấy cả ảnh mặc định -> Dùng Gradient")
+
+    # 4. Setup Gradient (Chỉ dùng khi KHÔNG CÓ bất kỳ ảnh nào)
     bg_gradient = ft.LinearGradient(colors=["#141E30", "#243B55"]) if not bg_img else None
 
-    bg_dim_layer = ft.Container(expand=True, bgcolor="#66000000", visible=True if bg_img else False, opacity=1, animate_opacity=1000)
+    # 5. Các lớp phủ (Dim Layer)
+    bg_dim_layer = ft.Container(
+        expand=True, 
+        bgcolor="#66000000", 
+        visible=True if bg_img else False, 
+        opacity=1, 
+        animate_opacity=1000
+    )
     bg_content_layer = ft.Container(opacity=1, animate_opacity=500, content=None)
 
+    # 6. Container chính
     bg_container = ft.Container(
         expand=True,
         image=ft.DecorationImage(src=bg_img, fit=ft.ImageFit.COVER) if bg_img else None,
         gradient=bg_gradient, 
         content=ft.Stack([bg_dim_layer, bg_content_layer], expand=True),
-        opacity=0, animate_opacity=1000
+        # [FIX] Nếu có ảnh -> Opacity 0 (chờ startup), Nếu Gradient -> 1 luôn (để tránh màn đen)
+        opacity=0 if bg_img else 1, 
+        animate_opacity=1000
     )
 
     def pick_bg_result(e):
