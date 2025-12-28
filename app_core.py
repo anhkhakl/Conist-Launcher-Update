@@ -1881,7 +1881,6 @@ def main(page: ft.Page):
 
             ft.Container(height=10),
             
-            btn_system_check, # Nút kiểm tra cập nhật App
 
             btn_system_check, # Nút kiểm tra cập nhật App
 
