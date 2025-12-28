@@ -214,7 +214,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.1"
+CURRENT_VERSION = "2.0.2"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -482,6 +482,69 @@ def clean_name_for_slug(name):
     s = re.sub(r'[^a-z0-9_]+', '', s)
     return s.strip('_')
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# --- [FINAL CLEAN] SO SÁNH VERSION (KHÔNG DEBUG) ---
+def is_version_match_smart(ver_online, ver_local):
+    # Nếu dữ liệu lỗi -> Coi như khớp (Không báo update)
+    if not ver_online or not ver_local or ver_online in ["Error", "Unknown", "N/A"]: 
+        return True 
+
+    # Hàm tách lấy danh sách số: "v1.2.3b" -> ['1', '2', '3']
+    def get_nums(s): return re.findall(r'\d+', str(s))
+
+    nums_web = get_nums(ver_online)
+    nums_local = get_nums(ver_local)
+
+    # [ĐÃ XÓA DÒNG PRINT DEBUG Ở ĐÂY]
+
+    # Nếu cả 2 đều tìm thấy số -> So sánh từng cặp
+    if nums_web and nums_local:
+        min_len = min(len(nums_web), len(nums_local))
+        match_count = 0
+        for i in range(min_len):
+            if int(nums_web[i]) == int(nums_local[i]):
+                match_count += 1
+            else:
+                break 
+        
+        # Logic chấp nhận khớp
+        if match_count == len(nums_local): return True
+        if match_count == len(nums_web): return True
+        
+        return False
+
+    # So sánh chuỗi thường nếu không có số
+    return str(ver_local).lower().strip() in str(ver_online).lower().strip()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def check_startup_status():
     try:
         key = reg.OpenKey(reg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, reg.KEY_READ)
@@ -505,22 +568,38 @@ def toggle_startup(is_enabled):
         print(f"Lỗi Registry: {e}")
         return False
 
+# --- [REPLACE TẠI DÒNG 49-53] ---
 def fetch_lnd_version(lnd_url):
     if not lnd_url: return "N/A"
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(lnd_url, headers=headers, timeout=5)
         soup = BeautifulSoup(response.text, 'html.parser')
         
+        raw_ver = None
+        
+        # CÁCH 1: Tìm trong thẻ Info
         ver_p = soup.find('p', class_='data-label', string=re.compile(r'Phiên bản', re.I))
         if ver_p:
             ver_info = ver_p.find_next_sibling('p', class_='info')
-            if ver_info: return ver_info.text.strip()
-            
-        title = soup.title.string if soup.title else ""
-        ver_match = re.search(r'v[\d\.]+', title)
-        return ver_match.group(0) if ver_match else "Unknown"
-    except:
+            if ver_info: raw_ver = ver_info.get_text(strip=True)
+
+        # CÁCH 2: Tìm trong Tiêu đề (BẮT MỌI LOẠI SỐ)
+        if not raw_ver:
+            title = soup.title.string if soup.title else ""
+            # Regex mới: Bắt cụm "v" hoặc "Build" hoặc "Update" + Số bất kỳ
+            # VD: "v1.0", "Build 123", "Update 5"
+            match = re.search(r'(?:v|ver|build|update)\.?\s*(\d+(?:\.\d+)*)', title, re.I)
+            if match:
+                raw_ver = match.group(1)
+            else:
+                # Nếu không có chữ v/build, tìm cụm số có dấu chấm (1.0.2)
+                match_dot = re.search(r'(\d+(?:\.\d+)+)', title)
+                if match_dot: raw_ver = match_dot.group(1)
+        
+        return raw_ver if raw_ver else "Unknown"
+    except Exception as e:
+        print(f"Lỗi fetch LND: {e}")
         return "Error"
 
 def get_lnd_image(lnd_url):
@@ -598,13 +677,11 @@ def fetch_full_details(url):
         
         data = {}
 
-        # 1. Lấy Version trên Web
-        ver_p = soup.find('p', class_='data-label', string=re.compile(r'Phiên bản', re.I))
-        if ver_p:
-            ver_info = ver_p.find_next_sibling('p', class_='info')
-            if ver_info: data['web_version'] = ver_info.text.strip()
+        # 1. [FIX QUAN TRỌNG] Gọi hàm fetch_lnd_version để lấy version chuẩn
+        # (Thay vì tự cào thủ công hay bị lỗi như code cũ)
+        data['web_version'] = fetch_lnd_version(url)
 
-        # 2. Lấy Cấu hình
+        # 2. Lấy Cấu hình (Giữ nguyên)
         req_str = ""
         cols = [('game_area_sys_req_leftCol', 'TỐI THIỂU'), ('game_area_sys_req_rightCol', 'KHUYẾN NGHỊ')]
         for cls, title in cols:
@@ -615,10 +692,9 @@ def fetch_full_details(url):
                     req_str += li.get_text(strip=True) + "\n"
         data['requirements'] = req_str.strip() if req_str else "Không tìm thấy thông tin cấu hình."
 
-        # 3. [UPDATE] Lấy Album ảnh (Logic 3 lớp)
+        # 3. Lấy Album ảnh (Giữ nguyên logic 3 lớp)
         images = []
-        
-        # --- LỚP 1: Tìm khung Gallery chuẩn (screenshots_div) ---
+        # Lớp 1: Gallery
         screenshot_div = soup.find('div', id='screenshots_div')
         if screenshot_div:
             target_imgs = screenshot_div.find_all('img')
@@ -627,30 +703,19 @@ def fetch_full_details(url):
                 if src:
                     if src.startswith("/"): src = "https://linkneverdie.net" + src
                     if src not in images: images.append(src)
-
-        # --- LỚP 2 (MỚI): Nếu Lớp 1 rỗng, quét ảnh trong nội dung bài viết ---
-        # Chỉ nhắm vào các ảnh do người viết bài chèn vào (thường có class fr-dib hoặc fr-draggable)
+        # Lớp 2: Ảnh nội dung
         if not images:
-            print(f"[SCRAPE] Gallery rỗng, đang quét ảnh nội dung cho: {url}")
-            # Tìm tất cả ảnh có class chứa 'fr-' (đặc trưng của trình soạn thảo trên LND)
             content_imgs = soup.find_all('img', class_=re.compile(r'(fr-dib|fr-draggable)'))
-            
             for img in content_imgs:
                 src = img.get('src') or img.get('data-src')
                 if src:
                     if src.startswith("/"): src = "https://linkneverdie.net" + src
-                    
-                    # Lọc bớt các icon nhỏ hoặc ảnh rác (nếu cần)
-                    # Thường ảnh nội dung game sẽ không trùng lặp
-                    if src not in images:
-                        images.append(src)
-
-        # --- LỚP 3: Fallback lấy ảnh bìa (og:image) nếu vẫn trắng tay ---
+                    if src not in images: images.append(src)
+        # Lớp 3: Ảnh bìa
         if not images:
             meta_img = soup.find('meta', property='og:image')
             if meta_img: images.append(meta_img.get('content'))
 
-        # Lấy tối đa 10 ảnh để không làm nặng App
         data['album'] = images[:10]
 
         return data
@@ -952,7 +1017,7 @@ def main(page: ft.Page):
 # --- SETUP CỬA SỔ ---
     page.window.visible = False 
     page.window.always_on_top = True
-    page.title = "Conist Link Launcher v2.0"
+    page.title = f"Conist Link Launcher v{CURRENT_VERSION}" 
     page.window.title_bar_hidden = True
     page.window.frameless = True
     page.window.bgcolor = ft.colors.TRANSPARENT
@@ -1015,12 +1080,23 @@ def main(page: ft.Page):
 
                         if online_ver != "Error" and online_ver != "Unknown":
                             status_msg = ""
-                            if online_ver != local_ver:
+                            # --- [SỬA LOGIC SO SÁNH] ---
+                        if online_ver != "Error" and online_ver != "Unknown":
+                            status_msg = ""
+                            
+                            # Dùng hàm so sánh thông minh thay vì so sánh !=
+                            is_match = is_version_match_smart(online_ver, local_ver)
+                            
+                            if not is_match:
+                                # Nếu hàm bảo KHÔNG KHỚP -> Mới báo update
                                 status_msg = f"CÓ BẢN MỚI: {online_ver}"
                                 game['status'] = status_msg
                                 count_update += 1
+                                print(f"[UPDATE] {game['name']}: Local='{local_ver}' != Web='{online_ver}'")
                             else:
+                                # Nếu hàm bảo KHỚP -> Báo đã cập nhật (dù string có thể hơi khác)
                                 status_msg = "ĐÃ CẬP NHẬT"
+                                game['status'] = status_msg
                                 game['status'] = status_msg
                             
                             # Cập nhật UI Thẻ Game
@@ -1182,7 +1258,9 @@ def main(page: ft.Page):
                 content=ft.Row([
                     ft.Text("Conist Link Launcher", size=20, weight="bold", color="white", font_family="Segoe UI"),
                     ft.Container(width=6), 
-                    ft.Text("v2.0 Beta", size=12, color="#AAAAAA", italic=True, weight="bold")
+                    
+                    # [SỬA] Dùng f-string để lấy biến CURRENT_VERSION
+                    ft.Text(f"v{CURRENT_VERSION}", size=12, color="#AAAAAA", italic=True, weight="bold")
                 ], 
                 spacing=0, 
                 vertical_alignment=ft.CrossAxisAlignment.END 
@@ -1690,10 +1768,12 @@ def main(page: ft.Page):
 
         if is_on:
             def tracking_loop():
-                TARGET_TITLE = "Conist Link Launcher v2.0"
+                TARGET_TITLE = f"Conist Link Launcher v{CURRENT_VERSION}"
+                
                 import math 
                 
                 while coord_container.visible:
+                    # ... (code bên dưới giữ nguyên)
                     x, y = get_relative_cursor_pos(TARGET_TITLE)
                     
                     # 1. Tính khoảng cách tới đáy (Hữu ích khi đặt nút ở dưới)
@@ -1803,11 +1883,14 @@ def main(page: ft.Page):
             
             btn_system_check, # Nút kiểm tra cập nhật App
 
+            btn_system_check, # Nút kiểm tra cập nhật App
+
             ft.Container(expand=True), 
-            ft.Text("Conist Link Launcher v2.0", italic=True, color="grey", size=12)
+            
+            # [SỬA] Dùng f-string để hiển thị đúng version
+            ft.Text(f"Conist Link Launcher v{CURRENT_VERSION}", italic=True, color="grey", size=12)
         ])
     )
-
     # --- SEARCH BOX ---
     def hover_search(e):
         is_expand = e.data == "true" or search_box.value != ""
@@ -2797,419 +2880,148 @@ def main(page: ft.Page):
 
 
 
-    def show_game_detail_dialog(game, card_ref):
-        # 1. Reset giao diện về mặc định (Tránh hiện thông tin của game cũ)
-        dt_name.value = game['name']
-        dt_ver.value = f"Phiên bản hiện tại: {game['version']}"
-        dt_desc.value = game.get('subtitle', 'Đang tải mô tả...')
-        dt_img_bg.src = game['icon'] # Tạm thời dùng icon làm nền
-        
-        # Reset phần cấu hình và ảnh
-        dt_req.value = "Đang kết nối LinkNeverDie để lấy cấu hình..."
-        dt_images_row.controls.clear()
-        
-        # Nút tải game
-        # --- [NEW] LOGIC CẬP NHẬT NÚT LẮP GHÉP ---
-        # 1. Reset trạng thái nút về ban đầu
-        driver_text.opacity = 0
-        driver_overlay.width = 40
-        driver_overlay.border_radius = ft.border_radius.only(top_right=8, bottom_right=8, top_left=0, bottom_left=0)
-        driver_arrow_container.right = 10
-        driver_arrow.name = ft.icons.KEYBOARD_ARROW_LEFT
-        
-        # 2. Gán sự kiện cho Nút Tải Gốc
-        if game['download_link']:
-            btn_download_base.bgcolor = "orange"
+
+
+
+
+
+
+
+
+
+
+            # --- [FINAL V2] SHINE BUTTON (TO ĐẸP & CLICKABLE) ---
+# =================================================================
+    # 1. CLASS SHINE BUTTON (NÚT UPDATE)
+    # =================================================================
+    class ShineButton(ft.Container):
+        def __init__(self, text="Kiểm tra Update", width=200, height=50, on_click_action=None):
+            super().__init__()
+            self.width = width
+            self.height = height
+            self.border_radius = 8
+            self.bgcolor = "#444444" 
+            self.clip_behavior = ft.ClipBehavior.HARD_EDGE
+            self.on_click = on_click_action 
+            self.is_loading = False
+
+            # Tia sáng
+            self.shine = ft.Container(
+                width=120, height=height * 3, 
+                gradient=ft.LinearGradient(
+                    colors=["#00FFFFFF", "#20FFFFFF", "#80FFFFFF", "#20FFFFFF", "#00FFFFFF"], 
+                    begin=ft.alignment.center_left, end=ft.alignment.center_right,
+                ),
+                rotate=ft.Rotate(0.5),
+                offset=ft.Offset(-2, 0),
+                opacity=0, 
+                animate_offset=ft.Animation(0), 
+            )
+
+            # Nội dung
+            self.icon_control = ft.Icon(ft.icons.CLOUD, color="white", size=20)
+            self.text_control = ft.Text(text, color="white", weight="bold", size=13)
             
-            def on_download_click(e):
-                # [THÔNG BÁO BLUE] - "Tôi đã nhận lệnh!"
-                show_push_notification("Đang lấy thông tin game...", "loading")
-                
-                # Sau đó mới đóng bảng và tải
-                close_detail(None)
-                
-                # [MẸO] Delay nhẹ 0.2s để thông báo Blue kịp hiện lên trước khi máy tính bận tải
-                def start_dl():
-                    import time
-                    time.sleep(0.2) 
-                    trigger_download_process(game)
-                
-                threading.Thread(target=start_dl, daemon=True).start()
+            self.content = ft.Stack([
+                self.shine,      
+                ft.Row([self.icon_control, self.text_control], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
+            ], alignment=ft.alignment.center)
 
-            btn_download_base.on_click = on_download_click
-            
-            try:
-                btn_download_base.content.controls[1].value = "TẢI NGAY"
-                btn_download_base.content.update()
-            except: pass
-            
-        else:
-            # Trường hợp không có link
-            btn_download_base.bgcolor = "grey"
-            btn_download_base.on_click = None
-            try:
-                btn_download_base.content.controls[1].value = "CHƯA CÓ LINK"
-            except: pass
+        def start_loading(self):
+            if self.is_loading: return
+            self.is_loading = True
+            self.text_control.value = "Đang kiểm tra..."
+            self.bgcolor = "#555555"
+            self.icon_control.name = ft.icons.CLOUD_SYNC
+            self.disabled = True 
+            self.update()
 
-        # 3. Gán Link cho Nút Driver (Lớp trên)
-        if game['download_link']: # Dùng tạm link download làm link driver (hoặc bạn có trường riêng thì thay vào)
-            current_driver_link[0] = game['download_link'] 
-            driver_overlay.visible = True
-        else:
-            driver_overlay.visible = False # Không có link thì giấu cái đuôi đi
+            def loop_anim():
+                while self.is_loading:
+                    # Reset
+                    self.shine.animate_offset = ft.Animation(0) 
+                    self.shine.offset = ft.Offset(-2, 0)
+                    self.shine.opacity = 0 
+                    self.shine.update()
+                    time.sleep(0.05)
+                    if not self.is_loading: break
 
-        # Update giao diện nút
-        dt_download_stack.update()
+                    # Run
+                    self.shine.animate_offset = ft.Animation(1000, "easeOut") 
+                    self.shine.offset = ft.Offset(3, 0)
+                    self.shine.opacity = 0.8
+                    self.shine.update()
+                    time.sleep(1.2)
+                
+                # Cleanup
+                self.shine.opacity = 0
+                self.shine.offset = ft.Offset(-2, 0)
+                self.shine.update()
+
+            threading.Thread(target=loop_anim, daemon=True).start()
+
+        def set_status(self, text, color, icon_name):
+            self.is_loading = False 
+            self.text_control.value = text
+            self.bgcolor = color
+            self.icon_control.name = icon_name
+            self.disabled = False 
+            self.update()
+
+
+
+# =================================================================
+    # [FIX] 1. LOGIC KÉO THẢ ẢNH (DRAG TO SCROLL)
+    # =================================================================
+    def on_pan_start(e):
+        dt_images_row.is_dragging = True
+        dt_images_row.velocity = 0 
+
+    def on_scroll_images(e):
+        current = getattr(dt_images_row, "scroll_x", 0)
+        new_pos = current - e.delta_x
+        if new_pos < 0: new_pos = 0
         
-        # Nút Việt hóa
-        if game.get('viet_link'):
-            dt_viet_btn.visible = True
-            dt_viet_btn.on_click = lambda e: webbrowser.open(game['viet_link'])
-        else:
-            dt_viet_btn.visible = False
+        dt_images_row.scroll_x = new_pos
+        dt_images_row.scroll_to(offset=new_pos, duration=0)
+        dt_images_row.velocity = e.delta_x
 
-        # Logic Update
-        dt_update_btn.text = "Đang kiểm tra..."
-        dt_update_btn.disabled = True
+    def on_scroll_end(e):
+        dt_images_row.is_dragging = False
+        def inertia_loop():
+            vel = getattr(dt_images_row, "velocity", 0)
+            while abs(vel) > 0.1 and not dt_images_row.is_dragging:
+                vel = vel * 0.95 
+                current = getattr(dt_images_row, "scroll_x", 0)
+                new_pos = current - vel
+                if new_pos < 0: 
+                    new_pos = 0
+                    vel = 0
+                dt_images_row.scroll_x = new_pos
+                dt_images_row.scroll_to(offset=new_pos, duration=0)
+                time.sleep(0.010)
+        threading.Thread(target=inertia_loop, daemon=True).start()
 
-        # [QUAN TRỌNG] Logic đóng Sidebar & Trigger
-        trigger_zone.visible = False 
-        sidebar_container.offset = ft.Offset(1.1, 0)
-        
-        # [FIX] Tắt luôn vùng cảm ứng Download
-        dl_trigger_zone.visible = False
-        dl_trigger_zone.update()
-        
-        trigger_zone.update()
-        sidebar_container.update()
-
-        # Hiển thị Overlay Game
-        game_detail_overlay.offset = ft.Offset(0, 0)
-        page.update()
-
-        # 2. CHẠY LUỒNG NGẦM ĐỂ CÀO DỮ LIỆU (Không làm đơ app)
-        def process_scraped_data():
-            def update_bg_preview(src):
-                if dt_img_bg.src != src:
-                    dt_img_bg.src = src
-                    dt_img_bg.update()
-            # Gọi hàm cào dữ liệu ở PHẦN 2
-            data = fetch_full_details(game['lnd_url'])
-            
-            if not data:
-                dt_req.value = "Không thể lấy dữ liệu (Lỗi mạng hoặc Link hỏng)."
-                dt_update_btn.text = "Lỗi K.Nối"
-                page.update()
-                return
-
-            # A. Cập nhật Cấu hình
-            if data.get('requirements'):
-                game['requirements'] = data['requirements'] # Lưu cache
-                dt_req.value = data['requirements']
-
-            
-            # B. Cập nhật Album ảnh
-            if data.get('album'):
-                album = data['album']
-                game['album_images'] = album 
-                dt_images_row.controls.clear()
-                
-                # [FIX GIẢM LAG] Chỉ nhân 6 lần thôi (thay vì 50)
-                # Vẫn đủ dài để cuộn sướng tay mà không làm đơ máy
-                infinite_album = album * 4
-                
-                # 1. Tạo hàng Preview
-                for i, img_src in enumerate(infinite_album):
-                    img_card = ft.Container(
-                        content=ft.Image(
-                            src=img_src, 
-                            height=400, 
-                            border_radius=15, 
-                            fit=ft.ImageFit.FIT_HEIGHT,
-                        ),
-                        border=ft.border.all(2, "#66FFFFFF"), 
-                        border_radius=15,
-                        padding=0,
-                        # Logic đổi nền vẫn giữ nguyên
-                        on_hover=lambda e, src=img_src: update_bg_preview(src) if e.data == "true" else None
-                    )
-                    dt_images_row.controls.append(img_card)
-
-                dt_images_row.alignment = ft.MainAxisAlignment.CENTER
-                
-                # [FIX] Đặt vị trí cuộn vào giữa danh sách để có thể kéo trái/phải thoải mái
-                # Giả sử mỗi ảnh rộng khoảng 300px (ước lượng)
-                mid_pos = (len(infinite_album) * 300) / 2
-                dt_images_row.scroll_x = mid_pos 
-                dt_images_row.scroll_to(offset=mid_pos, duration=0)
-
-                # 2. Logic Song Song (Giữ nguyên)
-                bg_index = 1 if len(album) > 1 else 0
-                if len(album) > 0:
-                    dt_img_bg.src = album[bg_index]
-                    dt_img_bg.opacity = 0.6 
-                    dt_img_bg.update()
-
-            # C. Kiểm tra Version (Auto Check Update)
-            web_ver = data.get('web_version', 'Unknown')
-            if web_ver != 'Unknown':
-                if web_ver != game['version']:
-                    res_stt = f"CÓ BẢN MỚI: {web_ver}"
-                    dt_update_btn.bgcolor = "red"
-                else:
-                    res_stt = "ĐÃ CẬP NHẬT"
-                    dt_update_btn.bgcolor = "green"
-                
-                game['status'] = res_stt
-                save_cache() # Lưu trạng thái mới vào file json
-                dt_update_btn.text = res_stt
-                
-                # Cập nhật ngược lại cái thẻ game bên ngoài
-                if card_ref: card_ref.refresh_ui()
-
-            dt_update_btn.disabled = False
-            page.update()
-
-        # Chạy Thread
-        threading.Thread(target=process_scraped_data, daemon=True).start()
-
-        # Reset trạng thái nút Update
-        dt_update_btn.text = "Kiểm tra Update"
-        dt_update_btn.disabled = False
-
-        # 4. Kích hoạt hiệu ứng trượt lên (Thay vì mở Dialog)
-        game_detail_overlay.offset = ft.Offset(0, 0) 
-        page.update()
-        status_row = ft.Text(game['status'], color="orange", weight="bold", size=16)
-
-# ... (code cũ của bạn: dt_download_btn, dt_update_btn, v.v...) ...
-
-# [FIX] Thụt vào trong thẳng hàng với các dòng trên
-        trigger_zone.visible = False 
-        sidebar_container.offset = ft.Offset(1.1, 0)
-        trigger_zone.update()
-        sidebar_container.update()
-    # --- LAYOUT CHÍNH ---
-    for g in GAME_LIST: grid.controls.append(GameCard(g))
-
+    # =================================================================
+    # [FIX] 2. LOGIC HÌNH NỀN & CHẾ ĐỘ NGHỈ (IDLE MODE)
+    # =================================================================
+    
+    # A. Hình nền & File Picker
     bg_img = APP_CONFIG.get("background")
-    
-    if not bg_img:
-        default_bg_path = os.path.join(get_base_path(), DATA_DIR_NAME, "default_bg.png")
-        if os.path.exists(default_bg_path):
-            bg_img = default_bg_path
     bg_gradient = ft.LinearGradient(colors=["#141E30", "#243B55"]) if not bg_img else None
-    # Tìm dòng dt_img_bg = ... và sửa thành:
-    dt_img_bg = ft.Image(
-        src="", 
-        width=1280, 
-        height=720,
-        fit=ft.ImageFit.COVER, 
-        opacity=0.4,
-    )
-    dt_name = ft.Text("", size=40, weight="bold", font_family="Segoe UI")
-    dt_ver = ft.Text("", size=15, italic=True, color="#AAAAAA")
-    dt_desc = ft.Text("", size=14, no_wrap=False, max_lines=3, color="white")
-    # --- [FINAL V4] NÚT TẢI GAME LẮP GHÉP (2 THAO TÁC) ---
-    
-    # --- [VERSION 5] NÚT LẮP GHÉP (TÁCH BIỆT ANIMATION & LINK) ---
-    
-    # --- [FINAL V8] NÚT LẮP GHÉP (BIG HITBOX + TEXT CHUẨN) ---
-    
-    # 1. Các thành phần con
-    driver_text = ft.Text(
-        "LẤY LINK DRIVER", # [ĐÃ ĐỔI TÊN]
-        size=13, weight="bold", color="white", 
-        opacity=0, animate_opacity=200
-    )
-    
-    driver_arrow = ft.Icon(ft.icons.KEYBOARD_ARROW_LEFT, color="white", size=20)
-    current_driver_link = [""] 
 
-    # 2. HÀM XỬ LÝ 1: MỞ WEB (Chỉ chạy khi nhấn vào Chữ)
-    def on_driver_action_click(e):
-        e.control.stop_propagation = True 
-        if current_driver_link[0]:
-            webbrowser.open(current_driver_link[0])
-            show_push_notification("Đang mở trình duyệt...", "info")
-        else:
-            show_push_notification("Lỗi: Không tìm thấy Link!", "error")
-
-    # 3. HÀM XỬ LÝ 2: ANIMATION (Đóng/Mở)
-    def toggle_driver_mode(e):
-        if e: e.control.stop_propagation = True 
-        
-        is_closed = driver_overlay.width < 100 
-        
-        if is_closed:
-            # === MỞ RA ===
-            driver_text_container.visible = True
-            driver_text_container.update()
-
-            driver_overlay.width = 300
-            driver_overlay.bgcolor = "#2E7D32" 
-            driver_overlay.border_radius = 8   
-            
-            # [FIX HITBOX] Đẩy sang trái (Right=260)
-            driver_arrow_container.right = 260 
-            driver_arrow.name = ft.icons.KEYBOARD_ARROW_RIGHT 
-            
-            def show_text():
-                time.sleep(0.2)
-                driver_text.opacity = 1
-                driver_text.update()
-            threading.Thread(target=show_text, daemon=True).start()
-            
-        else:
-            # === ĐÓNG LẠI ===
-            driver_text.opacity = 0 
-            
-            driver_overlay.width = 40
-            driver_overlay.bgcolor = "#CC8400" 
-            driver_overlay.border_radius = ft.border_radius.only(top_right=8, bottom_right=8)
-            
-            # [FIX HITBOX] Về vị trí cũ (Right=0 để lấp đầy góc phải)
-            driver_arrow_container.right = 0 
-            driver_arrow.name = ft.icons.KEYBOARD_ARROW_LEFT
-
-            def hide_text_container():
-                time.sleep(0.4) 
-                if driver_overlay.width < 100:
-                    driver_text_container.visible = False
-                    driver_text_container.update()
-            threading.Thread(target=hide_text_container, daemon=True).start()
-        
-        driver_overlay.update()
-        driver_arrow.update()
-        driver_arrow_container.update()
-        driver_text.update()
-
-    # 4. Lớp Nền (Nút Tải Game Gốc)
-    btn_download_base = ft.Container(
-        content=ft.Row([
-            ft.Icon(ft.icons.DOWNLOAD, color="white"),
-            ft.Text("TẢI NGAY", color="white", weight="bold")
-        ], alignment=ft.MainAxisAlignment.CENTER),
-        bgcolor="orange",
-        height=50, width=300,
-        border_radius=8,
-        on_click=None 
-    )
-
-    # 5. Lớp Phủ (Nút Driver)
-    
-    # [FIX] Vùng Chứa Mũi Tên (Hitbox to hơn)
-    driver_arrow_container = ft.Container(
-        content=driver_arrow,
-        # Tăng kích thước vùng bấm lên 40x40 (trước là ôm sát icon 20x20)
-        width=40, height=40, 
-        alignment=ft.alignment.center, # Căn giữa icon trong vùng bấm
-        bgcolor=None, # Trong suốt
-        
-        # Căn chỉnh vị trí: Top=5 để căn giữa theo chiều dọc (50-40)/2
-        right=0, top=5, 
-        
-        animate_position=ft.Animation(400, "easeOutQuart"),
-        on_click=toggle_driver_mode, 
-        tooltip="Quay lại / Đóng"
-    )
-    
-    # Nút Chữ: CHỈ MỞ WEB
-    driver_text_container = ft.Container(
-        content=driver_text, 
-        alignment=ft.alignment.center, 
-        padding=ft.padding.only(left=30),
-        on_click=on_driver_action_click, 
-        tooltip="Nhấn để lấy Link",
-        visible=False 
-    )
-
-    driver_overlay = ft.Container(
-        width=40, height=50, 
-        bgcolor="#CC8400", 
-        border_radius=ft.border_radius.only(top_right=8, bottom_right=8),
-        right=0, 
-        animate=ft.Animation(400, "easeOutQuart"), 
-        
-        content=ft.Stack([
-            driver_text_container,   
-            driver_arrow_container,  
-        ]),
-        
-        on_click=toggle_driver_mode,
-        clip_behavior=ft.ClipBehavior.HARD_EDGE
-    )
-
-    # 6. Gộp lại
-    dt_download_stack = ft.Stack(
-        controls=[btn_download_base, driver_overlay],
-        width=300, height=50
-    )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-    dt_req = ft.Text("Đang tải cấu hình...", size=12, color="#CCCCCC", font_family="Consolas")
-    # [FIX] Ẩn thanh cuộn để dùng tính năng kéo thả
-    dt_images_row = ft.Row(
-        scroll=ft.ScrollMode.HIDDEN, 
-        wrap=False, 
-        spacing=10,
-    )
-    # Gắn thêm biến này để lưu vị trí hiện tại
-    dt_images_row.scroll_x = 0
-    dt_images_row.velocity = 0 # Tốc độ kéo
-    dt_images_row.is_dragging = False # Đang chạm tay vào hay không?
-    dt_viet_btn = ft.ElevatedButton("Tải Việt Hóa", icon=ft.icons.LANGUAGE, bgcolor="green", color="white", visible=False)
-    dt_update_btn = ft.ElevatedButton("Kiểm tra Update", icon=ft.icons.REFRESH, bgcolor="#444444", color="white", height=50)
-    bg_dim_layer = ft.Container(
-        expand=True,
-        bgcolor="#66000000", 
-        visible=True if bg_img else False,
-        opacity=1, 
-        animate_opacity=ft.Animation(1000, "easeOut"),
-    )
-
-    # [ĐÃ SỬA] Lớp này chỉ để làm hiệu ứng mờ nền, KHÔNG ĐƯỢC chứa nội dung
-    bg_content_layer = ft.Container(
-        opacity=1, 
-        animate_opacity=ft.Animation(500, "easeOut"), 
-        content=None 
-    )
+    bg_dim_layer = ft.Container(expand=True, bgcolor="#66000000", visible=True if bg_img else False, opacity=1, animate_opacity=1000)
+    bg_content_layer = ft.Container(opacity=1, animate_opacity=500, content=None)
 
     bg_container = ft.Container(
-        
         expand=True,
         image=ft.DecorationImage(src=bg_img, fit=ft.ImageFit.COVER) if bg_img else None,
         gradient=bg_gradient, 
-        border_radius=15, 
-        border=None, 
-        clip_behavior=ft.ClipBehavior.HARD_EDGE, 
-        content=ft.Stack([
-            bg_dim_layer, 
-            bg_content_layer 
-        ], expand=True),
-        # --- [FIX QUAN TRỌNG: ẨN BAN ĐẦU ĐỂ CHỜ HIỆU LỆNH] ---
-        opacity=0, 
-        animate_opacity=ft.Animation(1000, "easeOut")
-        # ----------------------------------------------------
+        content=ft.Stack([bg_dim_layer, bg_content_layer], expand=True),
+        opacity=0, animate_opacity=1000
     )
-# --- SETUP FILE PICKER ---
-    # --- SETUP FILE PICKER (CHO BACKGROUND) ---
-    def pick_bg_result(e: ft.FilePickerResultEvent):
+
+    def pick_bg_result(e):
         if e.files:
             path = e.files[0].path
             APP_CONFIG["background"] = path
@@ -3218,173 +3030,359 @@ def main(page: ft.Page):
             bg_container.gradient = None 
             bg_container.update()
     
-    # [THÊM ĐOẠN NÀY] Khởi tạo và đưa vào Overlay
     file_picker = ft.FilePicker(on_result=pick_bg_result)
     page.overlay.append(file_picker)
-    # --- IDLE MODE ---
+
+    # B. Chế độ nghỉ (Idle Mode)
     IDLE_TIMEOUT = 300 
-    state = {
-        "last_interaction": time.time(),
-        "is_idle": False
-    }
+    state = {"last_interaction": time.time(), "is_idle": False}
+    sleep_overlay = ft.Container(expand=True, bgcolor="transparent", visible=False)
 
     def go_to_sleep():
         if not state["is_idle"]:
             state["is_idle"] = True
-            
-            # 1. Làm nền sáng lên (Giữ nguyên)
             bg_dim_layer.opacity = 0 
             bg_content_layer.opacity = 0 
-            
-            # 2. [MỚI] Ẩn toàn bộ giao diện chính (Header + Game)
-            body_container.opacity = 0 
-
-            # 3. Ẩn Sidebar (Giữ nguyên)
+            # Ẩn nội dung chính
+            if 'body_container' in locals() or 'body_container' in globals():
+                body_container.opacity = 0
+            # Ẩn sidebar
             sidebar_container.offset = ft.Offset(1.1, 0)
             sidebar_blur_layer.opacity = 0
-            sidebar_blur_layer.visible = False
-            
-            # 4. Bật lớp cảm ứng để đánh thức
             sleep_overlay.visible = True
             page.update()
 
     def wake_up(e=None):
         state["last_interaction"] = time.time()
-        # Nếu đang ngủ hoặc lớp cảm ứng đang bật
-        if state["is_idle"] or sleep_overlay.visible == True:
+        if state["is_idle"] or sleep_overlay.visible:
             state["is_idle"] = False
-            
-            # 1. Làm nền tối lại (Giữ nguyên)
             bg_dim_layer.opacity = 1
             bg_content_layer.opacity = 1
-            
-            # 2. [MỚI] Hiện lại giao diện chính
-            body_container.opacity = 1
-            
-            # 3. Tắt lớp cảm ứng
+            if 'body_container' in locals() or 'body_container' in globals():
+                body_container.opacity = 1
             sleep_overlay.visible = False
             page.update()
 
-    def on_keyboard(e: ft.KeyboardEvent):
-        # 1. Phím tắt ngủ đông cũ (Giữ nguyên)
-        if e.ctrl and e.key == "0":
-            go_to_sleep()
-        
-        # 2. [UPGRADE] CTRL + K: Copy Full Tọa Độ (Left, Top, Right, Bottom)
-        if e.ctrl and e.key.lower() == "k":
-            if coord_container.visible:
-                # Lấy tọa độ X, Y chuẩn
-                x, y = get_relative_cursor_pos("Conist Link Launcher v2.0")
-                
-                # Kích thước cố định của Launcher (Dùng để tính Right/Bottom)
-                WIN_W = 1280
-                WIN_H = 720
-                
-                # Tính toán các giá trị neo ngược
-                val_right = WIN_W - x
-                val_bottom = WIN_H - y
-                
-                # Tạo chuỗi copy chứa TẤT CẢ tham số
-                # Bạn paste vào code xong cái nào không cần thì xóa đi
-                clip_text = f"left={x}, top={y}, right={val_right}, bottom={val_bottom}"
-                
-                page.set_clipboard(clip_text)
-                
-                # Hiện thông báo xác nhận
-                page.snack_bar = ft.SnackBar(
-                    content=ft.Text(f"📋 Đã chép Full: {clip_text}", color="white", size=12),
-                    bgcolor="#228B22", 
-                    duration=1000
-                )
-                page.snack_bar.open = True
-                page.update()
-            else:
-                # (Tùy chọn) Báo lỗi nếu chưa bật tool
-                # print("Hãy bật 'Hiện tọa độ chuột' trong Cài đặt trước!")
-                pass
-
-
-
+    sleep_overlay.on_hover = lambda e: wake_up()
     page.on_scroll = wake_up
     page.on_click = wake_up
-    page.on_keyboard_event = on_keyboard
 
-    sleep_overlay = ft.Container(
-        expand=True,
-        bgcolor="transparent",
-        visible=False,
-        on_hover=lambda e: wake_up(), 
-        on_click=lambda e: wake_up(), 
+    # =================================================================
+    # [FIX] 3. KHỞI TẠO BIẾN GIAO DIỆN (UI VARIABLES)
+    # =================================================================
+
+    # [FIX] 3. KHỞI TẠO BIẾN GIAO DIỆN (UI VARIABLES)
+    dt_img_bg = ft.Image(src="", width=1280, height=720, fit=ft.ImageFit.COVER, opacity=0.4)
+    
+    # [ĐÃ SỬA] Xóa shadow đi để hết lỗi (ft.Image không hỗ trợ shadow trực tiếp)
+    dt_icon_small = ft.Image(src="", width=100, height=100, border_radius=15, fit=ft.ImageFit.COVER)
+
+    dt_name = ft.Text("", size=40, weight="bold", font_family="Segoe UI")
+    dt_ver = ft.Text("", size=15, italic=True, color="#AAAAAA")
+    dt_desc = ft.Text("", size=14, no_wrap=False, max_lines=3, color="white")
+    dt_req = ft.Text("Đang tải cấu hình...", size=12, color="#CCCCCC", font_family="Consolas")
+    
+    dt_images_row = ft.Row(scroll=ft.ScrollMode.HIDDEN, wrap=False, spacing=10)
+    dt_images_row.scroll_x = 0
+    dt_images_row.velocity = 0
+    dt_images_row.is_dragging = False
+
+    dt_viet_btn = ft.ElevatedButton("Tải Việt Hóa", icon=ft.icons.LANGUAGE, bgcolor="green", color="white", visible=False)
+    dt_update_btn = ShineButton(text="Kiểm tra Update", width=200)
+
+    # Logic Nút Tải & Driver
+    driver_text = ft.Text("LẤY LINK DRIVER", size=13, weight="bold", color="white", opacity=0, animate_opacity=200)
+    driver_arrow = ft.Icon(ft.icons.KEYBOARD_ARROW_LEFT, color="white", size=20)
+    current_driver_link = [""] 
+
+    def on_driver_action_click(e):
+        e.control.stop_propagation = True 
+        if current_driver_link[0]:
+            webbrowser.open(current_driver_link[0])
+            show_push_notification("Đang mở trình duyệt...", "info")
+        else:
+            show_push_notification("Lỗi: Không tìm thấy Link!", "error")
+
+    def toggle_driver_mode(e):
+        if e: e.control.stop_propagation = True 
+        is_closed = driver_overlay.width < 100 
+        if is_closed:
+            driver_text_container.visible = True
+            driver_text_container.update()
+            driver_overlay.width = 300
+            driver_overlay.bgcolor = "#2E7D32" 
+            driver_overlay.border_radius = 8   
+            driver_arrow_container.right = 260 
+            driver_arrow.name = ft.icons.KEYBOARD_ARROW_RIGHT 
+            threading.Thread(target=lambda: (time.sleep(0.2), setattr(driver_text, 'opacity', 1) or driver_text.update()), daemon=True).start()
+        else:
+            driver_text.opacity = 0 
+            driver_overlay.width = 40
+            driver_overlay.bgcolor = "#CC8400" 
+            driver_overlay.border_radius = ft.border_radius.only(top_right=8, bottom_right=8)
+            driver_arrow_container.right = 0 
+            driver_arrow.name = ft.icons.KEYBOARD_ARROW_LEFT
+            def hide_text():
+                time.sleep(0.4) 
+                if driver_overlay.width < 100: 
+                    driver_text_container.visible = False
+                    driver_text_container.update()
+            threading.Thread(target=hide_text, daemon=True).start()
+        driver_overlay.update()
+        driver_arrow.update()
+        driver_arrow_container.update()
+        driver_text.update()
+
+    btn_download_base = ft.Container(
+        content=ft.Row([ft.Icon(ft.icons.DOWNLOAD, color="white"), ft.Text("TẢI NGAY", color="white", weight="bold")], alignment=ft.MainAxisAlignment.CENTER),
+        bgcolor="orange", height=50, width=300, border_radius=8, on_click=None 
     )
 
-
-
-# --- LOGIC KÉO ẢNH (DRAG TO SCROLL) ---
-    # --- LOGIC KÉO ẢNH CÓ ĐÀ TRƯỢT (PHYSICS SCROLL) ---
+    driver_arrow_container = ft.Container(
+        content=driver_arrow, width=40, height=40, alignment=ft.alignment.center, bgcolor=None, 
+        right=0, top=5, animate_position=ft.Animation(400, "easeOutQuart"),
+        on_click=toggle_driver_mode, tooltip="Quay lại / Đóng"
+    )
     
-    def on_pan_start(e):
-        # Khi đặt tay xuống -> Dừng trượt ngay lập tức
-        dt_images_row.is_dragging = True
-        dt_images_row.velocity = 0 
+    driver_text_container = ft.Container(
+        content=driver_text, alignment=ft.alignment.center, padding=ft.padding.only(left=30),
+        on_click=on_driver_action_click, tooltip="Nhấn để lấy Link", visible=False 
+    )
 
-    def on_scroll_images(e):
-        # 1. Tính toán vị trí
-        current = getattr(dt_images_row, "scroll_x", 0)
-        new_pos = current - e.delta_x
-        if new_pos < 0: new_pos = 0 # Chặn đầu
-        
-        # 2. Cập nhật giao diện
-        dt_images_row.scroll_x = new_pos
-        dt_images_row.scroll_to(offset=new_pos, duration=0)
-        
-        # 3. [QUAN TRỌNG] Ghi nhớ tốc độ hiện tại để lát nữa trượt
-        dt_images_row.velocity = e.delta_x
+    driver_overlay = ft.Container(
+        width=40, height=50, bgcolor="#CC8400", 
+        border_radius=ft.border_radius.only(top_right=8, bottom_right=8),
+        right=0, animate=ft.Animation(400, "easeOutQuart"), 
+        content=ft.Stack([driver_text_container, driver_arrow_container]),
+        on_click=toggle_driver_mode, clip_behavior=ft.ClipBehavior.HARD_EDGE
+    )
 
-    def on_scroll_end(e):
-        dt_images_row.is_dragging = False
+    dt_download_stack = ft.Stack(controls=[btn_download_base, driver_overlay], width=300, height=50)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # =================================================================
+    # HÀM HIỂN THỊ CHI TIẾT GAME (UPDATE LOGIC LOADING ẢNH)
+    # =================================================================
+    def show_game_detail_dialog(game, card_ref):
+        # 1. Reset UI cơ bản
+        dt_name.value = game['name']
+        dt_icon_small.src = game['icon'] # Cập nhật ảnh icon nhỏ
+        dt_ver.value = f"Phiên bản hiện tại: {game['version']}"
+        dt_desc.value = game.get('subtitle', 'Đang tải mô tả...')
+        dt_img_bg.src = game['icon'] 
+        dt_req.value = "Đang kết nối LinkNeverDie..."
         
-        def inertia_loop():
-            vel = getattr(dt_images_row, "velocity", 0)
+        # 2. [FIX] Tạo Skeleton Loading (Ảnh giả) ngay lập tức
+        # Để người dùng biết là đang tải, không bị trống trơn
+        dt_images_row.controls.clear()
+        for _ in range(5):
+            loading_card = ft.Container(
+                width=250, height=350, 
+                bgcolor="#20FFFFFF", border_radius=15,
+                alignment=ft.alignment.center,
+                content=ft.Column([
+                    ft.ProgressRing(width=30, height=30, stroke_width=3, color="orange"),
+                    ft.Text("Đang tải ảnh...", size=10, color="#888888")
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
+            )
+            dt_images_row.controls.append(loading_card)
+        dt_images_row.scroll_x = 0
+        
+        # 3. Hàm xử lý logic chạy ngầm
+        def run_check_process(e=None):
+            dt_update_btn.start_loading()
             
-            # [FIX] Giảm giới hạn dừng xuống 0.1 để nó trôi lâu hơn
-            while abs(vel) > 0.1 and not dt_images_row.is_dragging:
-                # [FIX] Tăng ma sát lên 0.99 (Rất trơn, như trượt băng)
-                vel = vel * 0.99 
+            def worker():
+                time.sleep(0.5) # Delay nhẹ
                 
-                current = getattr(dt_images_row, "scroll_x", 0)
-                new_pos = current - vel
+                # Cào dữ liệu
+                data = fetch_full_details(game['lnd_url'])
                 
-                # Chặn đầu (không cho kéo quá về bên trái số 0)
-                if new_pos < 0: 
-                    new_pos = 0
-                    vel = 0
-                
-                dt_images_row.scroll_x = new_pos
-                dt_images_row.scroll_to(offset=new_pos, duration=0)
-                
-                time.sleep(0.010) # [FIX] Giảm thời gian ngủ để mượt hơn (10ms)
-        
-        threading.Thread(target=inertia_loop, daemon=True).start()
+                # --- XỬ LÝ KẾT QUẢ ---
+                if not data:
+                    dt_update_btn.set_status("Lỗi K.Nối", "#555555", ft.icons.CLOUD_OFF)
+                    # Xóa skeleton nếu lỗi
+                    dt_images_row.controls.clear()
+                    dt_images_row.controls.append(ft.Text("Không tải được ảnh :(", color="red"))
+                    dt_images_row.update()
+                    return
 
-# --- [BƯỚC 1: TẠO TAB CHI TIẾT GAME (FULL SCREEN)] ---
-    
-    # Các biến chứa thông tin để update động
-    
-    
-    def close_detail(e):
-        game_detail_overlay.offset = ft.Offset(0, 1) # Giấu xuống dưới
+                # A. Update Cấu hình
+                if data.get('requirements'):
+                    game['requirements'] = data['requirements']
+                    dt_req.value = data['requirements']
+                    dt_req.update()
+                
+                # B. [FIX] Update Album ảnh (Nhân 4 & Cuộn giữa)
+                if data.get('album'):
+                    album = data['album']
+                    game['album_images'] = album 
+                    
+                    # [QUAN TRỌNG] Nhân bản để tạo cảm giác vô tận
+                    infinite_album = album * 4 
+                    
+                    dt_images_row.controls.clear()
+                    
+                    for img_src in infinite_album:
+                        img_card = ft.Container(
+                            content=ft.Image(src=img_src, height=350, border_radius=10, fit=ft.ImageFit.FIT_HEIGHT),
+                            on_click=lambda e, s=img_src: setattr(dt_img_bg, 'src', s) or dt_img_bg.update(),
+                            # Hiệu ứng hover nhẹ
+                            animate_scale=ft.Animation(200, "easeOut"),
+                            on_hover=lambda e: (setattr(e.control, 'scale', 1.02 if e.data=='true' else 1.0) or e.control.update())
+                        )
+                        dt_images_row.controls.append(img_card)
+                    
+                    # Cập nhật hình nền mờ bằng ảnh đầu tiên lấy được
+                    if len(album) > 0:
+                        dt_img_bg.src = album[0]
+                        dt_img_bg.opacity = 0.6 
+                        dt_img_bg.update()
+                    
+                    # [FIX] Tính toán vị trí giữa để cuộn tới
+                    # Giả sử mỗi ảnh rộng trung bình 250px + 10px padding
+                    mid_index = len(infinite_album) // 2
+                    scroll_pos = mid_index * 260 
+                    
+                    dt_images_row.scroll_x = scroll_pos
+                    dt_images_row.update()
+                    # Cuộn nhẹ 1 chút để tạo hiệu ứng
+                    dt_images_row.scroll_to(offset=scroll_pos, duration=0)
+
+                # C. Check Version
+                web = data.get('web_version', 'Unknown')
+                local = game['version']
+                
+                txt, col, ico = "Không xác định", "#555555", ft.icons.HELP_OUTLINE
+                
+                if web and web not in ['Unknown', 'Error', 'N/A']:
+                    if not is_version_match_smart(web, local):
+                        txt, col, ico = f"CÓ BẢN MỚI: {web}", "#D32F2F", ft.icons.CLOUD_DOWNLOAD
+                    else:
+                        txt, col, ico = "ĐÃ CẬP NHẬT", "#2E7D32", ft.icons.CHECK_CIRCLE
+                else:
+                    txt, col, ico = "Web không ghi Ver", "#FF8F00", ft.icons.WARNING_AMBER
+                
+                game['status'] = txt
+                save_cache()
+                if card_ref: 
+                    try: card_ref.refresh_ui()
+                    except: pass
+                
+                dt_update_btn.set_status(txt, col, ico)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        dt_update_btn.on_click = run_check_process
         
-        # [FIX] Bật lại vùng cảm ứng Download (Về nhà rồi, hiện lên thôi)
+        # Logic nút tải & Driver
+        driver_overlay.visible = False
+        if game['download_link']:
+            btn_download_base.bgcolor = "orange"
+            btn_download_base.on_click = lambda e: (close_detail(None), threading.Thread(target=lambda: trigger_download_process(game), daemon=True).start())
+            try: btn_download_base.content.controls[1].value = "TẢI NGAY"
+            except: pass
+            current_driver_link[0] = game['download_link']
+            driver_overlay.visible = True
+        else:
+            btn_download_base.bgcolor = "grey"
+            btn_download_base.on_click = None
+            try: btn_download_base.content.controls[1].value = "CHƯA CÓ LINK"
+            except: pass
+
+        # Logic Việt Hóa
+        dt_viet_btn.visible = bool(game.get('viet_link'))
+        if dt_viet_btn.visible:
+            dt_viet_btn.on_click = lambda e: webbrowser.open(game['viet_link'])
+
+        # Hiển thị
+        trigger_zone.visible = False
+        sidebar_container.offset = ft.Offset(1.1, 0)
+        dl_trigger_zone.visible = False
+        game_detail_overlay.offset = ft.Offset(0, 0)
+        page.update()
+        
+        run_check_process()
+        
+        # Logic nút tải
+        driver_overlay.visible = False
+        if game['download_link']:
+            btn_download_base.bgcolor = "orange"
+            btn_download_base.on_click = lambda e: (close_detail(None), threading.Thread(target=lambda: trigger_download_process(game), daemon=True).start())
+            try: btn_download_base.content.controls[1].value = "TẢI NGAY"
+            except: pass
+            current_driver_link[0] = game['download_link']
+            driver_overlay.visible = True
+        else:
+            btn_download_base.bgcolor = "grey"
+            btn_download_base.on_click = None
+            try: btn_download_base.content.controls[1].value = "CHƯA CÓ LINK"
+            except: pass
+
+        # Logic Việt Hóa
+        dt_viet_btn.visible = bool(game.get('viet_link'))
+        if dt_viet_btn.visible:
+            dt_viet_btn.on_click = lambda e: webbrowser.open(game['viet_link'])
+
+        # Hiển thị Overlay
+        trigger_zone.visible = False
+        sidebar_container.offset = ft.Offset(1.1, 0)
+        dl_trigger_zone.visible = False
+        game_detail_overlay.offset = ft.Offset(0, 0)
+        page.update()
+        
+        run_check_process()
+
+    def close_detail(e):
+        game_detail_overlay.offset = ft.Offset(0, 1) 
         dl_trigger_zone.visible = True
         dl_trigger_zone.update()
-        
-        # Bật lại vùng cảm ứng Sidebar
         trigger_zone.visible = True
         trigger_zone.update()
-        
         page.update()
 
-    # [ĐÃ SỬA] Giao diện chi tiết game (Popup)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
     game_detail_overlay = ft.Container(
         width=1280, height=720,
         bgcolor="#141E30",
@@ -3408,19 +3406,27 @@ def main(page: ft.Page):
             ft.Container(
                 padding=50,
                 content=ft.Column([
-                    ft.Container(expand=True), # Đẩy nội dung xuống dưới
+                    ft.Container(expand=True), # Đẩy nội dung xuống đáy
                     
-                    # Tìm đoạn chứa dt_images_row và sửa chiều cao:
-                    # --- CODE MỚI (ĐÃ FIX) ---
+                    # --- [HEADER MỚI] ICON + TÊN GAME + VERSION ---
+                    ft.Row([
+                        dt_icon_small, # Ảnh nhỏ đã quay lại!
+                        ft.Column([
+                            dt_name,
+                            dt_ver,
+                        ], spacing=0, alignment=ft.MainAxisAlignment.CENTER)
+                    ], spacing=20),
+                    
+                    ft.Container(height=20), # Khoảng cách
+
+                    # --- ALBUM ẢNH (GIỮ NGUYÊN CODE KÉO THẢ) ---
                     ft.Text("HÌNH ẢNH MÔ TẢ:", size=16, weight="bold", color="orange"),
-                    
-                    # [FIX 1] Tăng chiều cao lên 420 để chứa vừa ảnh 400px
                     ft.Container(
-                        height=420, 
+                        height=350, # Giảm chiều cao chút cho cân đối
                         content=ft.GestureDetector(
-                            on_pan_start=on_pan_start,      # [MỚI] Bắt đầu chạm -> Dừng trượt cũ
-                            on_pan_update=on_scroll_images, # [CŨ] Đang kéo -> Di chuyển theo tay
-                            on_pan_end=on_scroll_end,       # [MỚI] Thả tay -> Trượt quán tính
+                            on_pan_start=on_pan_start,      
+                            on_pan_update=on_scroll_images, 
+                            on_pan_end=on_scroll_end,       
                             content=ft.Container(
                                 content=dt_images_row,
                                 padding=0, 
@@ -3429,29 +3435,25 @@ def main(page: ft.Page):
                         )
                     ),
 
-                    dt_name,
-                    dt_ver,
+                    ft.Container(height=10),
                     dt_desc,
 
                     ft.Divider(color="grey"),
 
-                    # Cấu hình (Mới)
+                    # --- CẤU HÌNH ---
                     ft.Text("CẤU HÌNH YÊU CẦU:", size=12, weight="bold", color="orange"),
                     ft.Container(
-                    height=100,
-                    padding=10,
-                    border=ft.border.all(1, "#444444"),
-                    border_radius=5,
-        # [SỬA] Bọc dt_req vào Column thì mới cuộn được
-                    content=ft.Column(
-                        [dt_req], 
-                        scroll=ft.ScrollMode.AUTO 
-                    )
-                ),
+                        height=100,
+                        padding=10,
+                        border=ft.border.all(1, "#444444"),
+                        border_radius=5,
+                        content=ft.Column([dt_req], scroll=ft.ScrollMode.AUTO)
+                    ),
 
                     ft.Container(height=20),
                     ft.Row([dt_download_stack, dt_viet_btn, dt_update_btn]),
-                ], scroll=ft.ScrollMode.HIDDEN)
+                    
+                ], scroll=ft.ScrollMode.HIDDEN) # Cho phép lăn chuột toàn bộ cột
             ),
             
             # 4. Nút Đóng (Góc trên phải)
@@ -3547,7 +3549,6 @@ def main(page: ft.Page):
         await asyncio.sleep(0.05)
         page.window.width = 1280
         page.window.height = 720
-        page.window.center()
         page.update()
         
         # --- [FIX QUAN TRỌNG] TẢI DATA MỚI NHẤT TỪ GITHUB ---
@@ -3648,7 +3649,6 @@ def main(page: ft.Page):
         
         page.window.width = 1280
         page.window.height = 720
-        page.window.center()
         page.update()
         
         await asyncio.sleep(0.1) # Nghỉ một nhịp
