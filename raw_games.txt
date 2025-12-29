@@ -129,3 +129,4 @@
     {"name": "Asterix & Obelix", "version": "v1.4", "lnd_url": "https://linkneverdie.net/game/asterix-obelix-mission-babylon-b-10278#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1Cw4iicyh_qDtuD0sOEXAKtteM9Fmso0G&authuser=0", "viet_link": None, "subtitle": ""},
     {"name": "Stronghold Crusader: Definitive Edition", "version": "v2.03", "lnd_url": "https://linkneverdie.net/game/stronghold-crusader-definitive-edition-b-9949", "download_link": "https://drive.usercontent.google.com/download?id=12UMPC3Jxq_v9SMcLJHHYPd0jGI_K4jzM&authuser=0", "viet_link": None, "subtitle": ""},
     {"name": "Drop Dead: The Cabin", "version": "v1.4", "lnd_url": "https://linkneverdie.net/game/drop-dead-the-cabin-b-10276#download_div", "download_link": "https://drive.usercontent.google.com/download?id=1Md9-ozWqB36rNtqg0ogLpVZbH-P02PWU&authuser=0", "viet_link": None, "subtitle": ""},
+]
