@@ -1,6 +1,47 @@
 import flet as ft
-import os
 import sys
+import os
+
+# --- [FIX BUG VỎ CŨ] LOGIC CƯỚP QUYỀN ĐIỀU KHIỂN ---
+# Vì Vỏ (EXE) không xử lý tham số dòng lệnh, ta phải xử lý ngay khi Vỏ nạp Core.
+if getattr(sys, 'frozen', False) and len(sys.argv) > 1:
+    # Kiểm tra xem tham số thứ 2 có phải là file .py (Overlay) không
+    target_arg = sys.argv[1]
+    
+    if target_arg.endswith(".py") and os.path.exists(target_arg):
+        try:
+            # 1. Đọc nội dung file Overlay (overlay_run.py)
+            with open(target_arg, "r", encoding="utf-8") as f:
+                script_content = f.read()
+            
+            # 2. Chạy nó ngay tại đây
+            exec(script_content, globals())
+            
+        except Exception as e:
+            print(f"Overlay Error: {e}")
+            
+        # 3. [QUAN TRỌNG NHẤT] GIẾT CHẾT CÁI VỎ NGAY LẬP TỨC
+        # Để nó không chạy xuống hàm main() và không mở cửa sổ Launcher
+        sys.exit(0)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -2448,10 +2489,12 @@ def main(page: ft.Page):
                 f.write(overlay_code)
             
             creation_flags = 0x08000000 if sys.platform == "win32" else 0
+            
+            # [SỬA LẠI] Gọi chính cái file EXE hiện tại (Vỏ), kèm theo đường dẫn script
+            # Cái Vỏ sẽ mở lên -> Nạp app_core -> Gặp đoạn code ở Bước 1 -> Chạy Overlay -> Tự sát
             subprocess.Popen([sys.executable, temp_file], creationflags=creation_flags)
             
         except Exception as e: print(f"Overlay Error: {e}")
-
 
 
 
