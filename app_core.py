@@ -1,47 +1,6 @@
 import flet as ft
-import sys
 import os
-
-# --- [FIX BUG VỎ CŨ] LOGIC CƯỚP QUYỀN ĐIỀU KHIỂN ---
-# Vì Vỏ (EXE) không xử lý tham số dòng lệnh, ta phải xử lý ngay khi Vỏ nạp Core.
-if getattr(sys, 'frozen', False) and len(sys.argv) > 1:
-    # Kiểm tra xem tham số thứ 2 có phải là file .py (Overlay) không
-    target_arg = sys.argv[1]
-    
-    if target_arg.endswith(".py") and os.path.exists(target_arg):
-        try:
-            # 1. Đọc nội dung file Overlay (overlay_run.py)
-            with open(target_arg, "r", encoding="utf-8") as f:
-                script_content = f.read()
-            
-            # 2. Chạy nó ngay tại đây
-            exec(script_content, globals())
-            
-        except Exception as e:
-            print(f"Overlay Error: {e}")
-            
-        # 3. [QUAN TRỌNG NHẤT] GIẾT CHẾT CÁI VỎ NGAY LẬP TỨC
-        # Để nó không chạy xuống hàm main() và không mở cửa sổ Launcher
-        sys.exit(0)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+import sys
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -58,13 +17,7 @@ import asyncio
 import ctypes
 import time
 import concurrent.futures 
-try:
-    import pystray
-    from pystray import MenuItem as item
-    HAS_TRAY_LIB = True
-except ImportError:
-    HAS_TRAY_LIB = False
-    print("Warning: Chưa cài pystray -> Tắt tính năng chạy ngầm.")
+
 
 
 
@@ -261,7 +214,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.3"
+CURRENT_VERSION = "2.0.2"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -936,70 +889,6 @@ class SplashLoader:
         self.page.bgcolor = "transparent"
         self.page.update()
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# --- [NEW] HÀM CHẠY SYSTEM TRAY ---
-def run_system_tray(page):
-    # 1. Định nghĩa hàm mở lại App
-    def on_open_request(icon, item):
-        icon.stop() # Tắt tray icon đi
-        page.window.visible = True
-        page.window.always_on_top = True # Đẩy lên trên cùng
-        page.update()
-        
-        import time
-        time.sleep(0.1)
-        page.window.always_on_top = False # Trả lại trạng thái bình thường
-        page.update()
-
-    # 2. Định nghĩa hàm thoát hẳn
-    def on_quit_request(icon, item):
-        icon.stop()
-        page.window.destroy() # Hủy cửa sổ Flet => Tắt App
-
-    # 3. Lấy icon của App
-    icon_path = os.path.join(get_base_path(), "Launcher_Data", "app_icon.ico")
-    # Nếu không tìm thấy icon thì dùng icon mặc định (tạo ảnh trống) hoặc bỏ qua
-    image = Image.open(icon_path) 
-
-    # 4. Tạo Menu chuột phải
-    menu = (
-        item('Mở Launcher', on_open_request, default=True), # Double click là mở
-        item('Thoát hẳn', on_quit_request)
-    )
-
-    # 5. Chạy Icon
-    tray_icon = pystray.Icon("ConistLauncher", image, "Conist Link Launcher", menu)
-    tray_icon.run()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ==========================================
 # 3. GIAO DIỆN CHÍNH (MAIN APP)
 # ==========================================
@@ -1123,24 +1012,36 @@ def main(page: ft.Page):
 
 
 
-# --- [SỬA LẠI] LOGIC TẮT APP THÔNG MINH ---
-    # [Trong hàm on_window_event]
+# --- [FIX CLEANUP] TẮT APP ÊM ÁI (KHÔNG HIỆN BẢNG ĐỎ) ---
     def on_window_event(e):
         if e.data == "close":
-            # Kiểm tra: Phải BẬT trong Setting VÀ ĐÃ CÀI thư viện mới chạy ngầm
-            run_bg = APP_CONFIG.get("run_in_background", False)
+            print(f"[EXIT] Người dùng bấm tắt. Đang dọn dẹp ngầm...")
             
-            if run_bg and HAS_TRAY_LIB:
-                print(f"[SYSTEM] Ẩn xuống System Tray...")
-                page.window.visible = False
-                page.update()
-                threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
-            else:
-                # Nếu chưa cài thư viện hoặc tắt setting -> Tắt hẳn App
-                print(f"[EXIT] Đang dọn dẹp và tắt hẳn...")
-                if len(ACTIVE_DOWNLOADS) > 0:
-                     for name, state in ACTIVE_DOWNLOADS.items(): state['cancelled'] = True
-                page.window.destroy()
+            # 1. Ẩn cửa sổ ngay lập tức (Để người dùng tưởng là tắt rồi)
+            page.window.visible = False
+            page.update()
+            
+            # 2. Xử lý dọn dẹp ngầm
+            if len(ACTIVE_DOWNLOADS) > 0:
+                # Gửi tín hiệu HỦY cho tất cả luồng
+                for name, state in ACTIVE_DOWNLOADS.items():
+                    state['cancelled'] = True
+                
+                # Chờ 1-2 giây cho các luồng kịp xóa file rác (Chạy ngầm ở Terminal)
+                import time
+                time.sleep(1.5)
+                
+                # Quét lại lần cuối xóa cưỡng chế
+                for name, state in ACTIVE_DOWNLOADS.items():
+                    path = state.get('path')
+                    if path and os.path.exists(path):
+                        try: 
+                            os.remove(path)
+                            print(f"[CLEANUP] Đã xóa file rác: {path}")
+                        except: pass
+
+            # 3. Tắt hẳn quy trình
+            page.window.destroy()
 
     page.window.prevent_close = True 
     page.window.on_event = on_window_event
@@ -1195,7 +1096,6 @@ def main(page: ft.Page):
 
 # --- [FIX 1] KHAI BÁO BIẾN CỜ Ở ĐÂY ---
     is_scanning_updates = False 
-    active_game_sessions = set()
 
     # Hàm xử lý chạy ngầm
     def process_game_updates_thread():
@@ -1277,90 +1177,7 @@ def main(page: ft.Page):
 
 
 
-# --- [NEW] GLOBAL WATCHER: TỰ HIỆN OVERLAY KHI MỞ TỪ FOLDER ---
-    def start_global_game_watcher():
-        import ctypes
-        from ctypes import wintypes
-        
-        print("[GLOBAL WATCHER] Đã kích hoạt chế độ rình game...")
-        
-        def worker():
-            while True:
-                try:
-                    # 1. Lấy danh sách tất cả cửa sổ đang hiện
-                    visible_windows = []
-                    
-                    EnumWindows = ctypes.windll.user32.EnumWindows
-                    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-                    GetWindowText = ctypes.windll.user32.GetWindowTextW
-                    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-                    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
-                    GetWindowRect = ctypes.windll.user32.GetWindowRect
-                    
-                    def foreach_window(hwnd, lParam):
-                        if IsWindowVisible(hwnd):
-                            length = GetWindowTextLength(hwnd)
-                            if length > 0:
-                                buff = ctypes.create_unicode_buffer(length + 1)
-                                GetWindowText(hwnd, buff, length + 1)
-                                title = buff.value
-                                visible_windows.append((hwnd, title))
-                        return True
-                    
-                    EnumWindows(EnumWindowsProc(foreach_window), 0)
 
-                    # 2. So khớp với GAME_LIST
-                    current_running = set()
-                    
-                    for hwnd, title in visible_windows:
-                        title_lower = title.lower()
-                        
-                        for game in GAME_LIST:
-                            g_name = game['name']
-                            # Tạo slug để so sánh chính xác hơn (bỏ ký tự đặc biệt)
-                            clean_target = clean_name_for_slug(g_name).replace("_", " ")
-                            
-                            # LOGIC SO SÁNH: Tên game nằm trong Tên cửa sổ
-                            if clean_target in title_lower or g_name.lower() in title_lower:
-                                
-                                # Lấy tọa độ
-                                rect = wintypes.RECT()
-                                GetWindowRect(hwnd, ctypes.byref(rect))
-                                w = rect.right - rect.left
-                                
-                                # Chỉ bắt cửa sổ game thật (Rộng > 600px) để tránh bắt nhầm cửa sổ con
-                                if w > 600:
-                                    current_running.add(g_name)
-                                    
-                                    # Nếu game này CHƯA có trong danh sách đã báo -> HIỆN OVERLAY
-                                    if g_name not in active_game_sessions:
-                                        print(f"[AUTO DETECT] Phát hiện game: {g_name}")
-                                        
-                                        # Tính tọa độ
-                                        gx = rect.left
-                                        gy = rect.top
-                                        icon_path = game.get('icon', '').replace("\\", "/")
-                                        
-                                        # Gọi Overlay Xịn
-                                        show_game_overlay(g_name, icon_path, gx, gy)
-                                        
-                                        # Đánh dấu đã báo
-                                        active_game_sessions.add(g_name)
-
-                    # 3. Dọn dẹp: Nếu game tắt rồi thì xóa khỏi session để lần sau mở lại còn báo tiếp
-                    # (Dùng copy để tránh lỗi khi đang lặp)
-                    for old_game in list(active_game_sessions):
-                        if old_game not in current_running:
-                            active_game_sessions.remove(old_game)
-                            # print(f"[AUTO DETECT] Game đã tắt: {old_game}")
-
-                except Exception as e:
-                    print(f"Global Watcher Error: {e}")
-                
-                # Nghỉ 2 giây rồi quét tiếp (đỡ tốn RAM)
-                time.sleep(2)
-
-        threading.Thread(target=worker, daemon=True).start()
 
 
 # --- [DÁN ĐOẠN NÀY VÀO NGAY SAU process_game_updates_thread] ---
@@ -2122,12 +1939,7 @@ def main(page: ft.Page):
             ft.Column([
                 ft.Switch(label="Khởi động cùng Windows", value=check_startup_status(), on_change=on_startup_change),
                 ft.Container(height=5), # Khoảng cách nhỏ 5px
-                ft.Switch(
-                    label="Cho phép ẩn vào taskbar khi thoát", 
-                    value=APP_CONFIG.get("run_in_background", False),
-                    on_change=lambda e: (APP_CONFIG.update({"run_in_background": e.control.value}), save_config())
-                ),
-                ft.Container(height=5),
+                
                 ft.Switch(label="Âm thanh hiệu ứng", value=True),
                 ft.Container(height=5), 
 
@@ -2332,14 +2144,15 @@ def main(page: ft.Page):
     # ==========================================
 
     def show_game_overlay(game_name, icon_path, game_x=0, game_y=0):
-        """Chạy Overlay: Chế độ 'Glass Pro' (Size vừa vặn - Xuyên thấu - Tên Game Rõ)"""
+        """Chạy Overlay: Chế độ 'Frozen Core' (Premium Single Icon)"""
         import subprocess
         import sys
         import textwrap
         
+        # Icon Launcher sẽ đảm nhận vai chính
         app_icon_path = os.path.join(get_base_path(), "Launcher_Data", "app_icon.ico").replace("\\", "/")
         
-        # Vị trí
+        # Tính toán vị trí
         pos_left = game_x + 20
         pos_top = game_y + 20
         if pos_left < 0: pos_left = 20
@@ -2351,130 +2164,166 @@ def main(page: ft.Page):
             import random
             try:
                 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QFrame, QGraphicsOpacityEffect, QGraphicsDropShadowEffect
-                from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QEasingCurve
+                from PyQt5.QtCore import Qt, QTimer, QVariantAnimation, QRect, QEasingCurve, QPoint, QSequentialAnimationGroup, QPropertyAnimation
                 from PyQt5.QtGui import QPixmap, QColor
             except ImportError:
                 sys.exit(1)
 
-            class SparkleDot(QFrame):
-                def __init__(self, parent, max_w, max_h):
+            # --- HẠT KHÓI ĐÁ KHÔ (DRY ICE) ---
+            class DryIceParticle(QFrame):
+                def __init__(self, parent, center_x, center_y):
                     super().__init__(parent)
-                    size = random.choice([2, 3])
-                    self.setGeometry(0, 0, size, size)
-                    color = random.choice(["#FFFFFF", "#FFFFE0", "#E0FFFF"])
-                    self.setStyleSheet(f"background-color: {{color}}; border-radius: {{size//2}}px;")
+                    # Kích thước ngẫu nhiên (Hạt mịn)
+                    size = random.randint(4, 10)
                     
-                    rx = random.randint(5, max_w - 5)
-                    ry = random.randint(5, max_h - 5)
-                    self.move(rx, ry)
+                    # Xuất phát ngẫu nhiên từ phần đáy của Icon
+                    start_x = center_x + random.randint(-20, 20)
+                    start_y = center_y + random.randint(15, 25) 
+                    
+                    self.setGeometry(start_x, start_y, size, size)
+                    self.setStyleSheet(f"background-color: #80FFFFFF; border-radius: {{size//2}}px;")
+                    
+                    # [PREMIUM] Làm mờ hạt để trông như khí (Blur)
+                    eff = QGraphicsDropShadowEffect(self)
+                    eff.setBlurRadius(15) # Độ mờ cao
+                    eff.setColor(QColor(255, 255, 255, 100))
+                    eff.setOffset(0, 0)
+                    self.setGraphicsEffect(eff)
+                    
                     self.show()
-
-                    self.eff = QGraphicsOpacityEffect(self)
-                    self.setGraphicsEffect(self.eff)
                     
-                    self.anim = QPropertyAnimation(self.eff, b"opacity")
-                    self.anim.setDuration(random.randint(600, 1000))
+                    # Animation: Rơi chậm xuống (Khí lạnh nặng)
+                    self.anim = QVariantAnimation(self)
+                    self.anim.setDuration(random.randint(1500, 2500)) # Trôi rất chậm
                     self.anim.setStartValue(0.0)
-                    self.anim.setKeyValueAt(0.5, 1.0)
-                    self.anim.setEndValue(0.0)
-                    self.anim.setEasingCurve(QEasingCurve.InOutSine)
+                    self.anim.setEndValue(1.0)
+                    
+                    self.start_pos = QPoint(start_x, start_y)
+                    # Đích đến: Rơi xuống và tản ra 2 bên
+                    spread = random.randint(-30, 30)
+                    drop = random.randint(30, 60)
+                    self.target_pos = QPoint(start_x + spread, start_y + drop)
+                    
+                    self.anim.valueChanged.connect(self.update_pos)
                     self.anim.finished.connect(self.deleteLater)
                     self.anim.start()
+
+                def update_pos(self, val):
+                    # Di chuyển
+                    curr_x = self.start_pos.x() + (self.target_pos.x() - self.start_pos.x()) * val
+                    curr_y = self.start_pos.y() + (self.target_pos.y() - self.start_pos.y()) * val
+                    self.move(int(curr_x), int(curr_y))
+                    
+                    # Mờ dần (Fade out)
+                    # Hiệu ứng: Hiện rõ ở giữa rồi tan biến (Parabola)
+                    opacity = 1.0 - val
+                    # Hack: Chỉnh alpha của background color thông qua style sheet thì nặng, 
+                    # nên ta chấp nhận nó mờ đều theo opacity effect của cha (nếu có)
+                    # Ở đây ta set opacity cho chính nó nếu chưa có effect
+                    pass 
 
             class GameOverlay(QWidget):
                 def __init__(self):
                     super().__init__()
                     self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
                     self.setAttribute(Qt.WA_TranslucentBackground)
+                    self.setGeometry({pos_left}, {pos_top}, 420, 120)
                     
-                    # [UPDATE 1] KÍCH THƯỚC TĂNG 20% (So với bản nhỏ)
-                    # 230x55 -> 280x70
-                    self.target_width = 280
-                    self.height = 70
-                    self.x_pos = {pos_left}
-                    self.y_pos = {pos_top}
-                    
-                    self.setGeometry(self.x_pos, self.y_pos, 0, self.height)
-
-                    # --- CONTAINER ---
+                    # --- CONTAINER CHÍNH ---
                     self.content_widget = QWidget(self)
-                    self.content_widget.setGeometry(0, 0, self.target_width, self.height)
+                    self.content_widget.setGeometry(10, 10, 380, 80)
                     
-                    # [UPDATE 2] TĂNG ĐỘ TRONG SUỐT (Thêm 10%)
-                    # Mã màu #80151515 (Alpha 80 ~ 50% Opacity) - Trong hơn bản cũ (A0)
-                    self.content_widget.setStyleSheet(\"""
-                        background-color: #80151515; 
-                        border: 1px solid #55555555; 
-                        border-radius: 10px;
-                    \""")
+                    # Nền tối mờ (Glassmorphism)
+                    self.content_widget.setStyleSheet("background-color: #F2101010; border-radius: 12px; border: 1px solid #333333;")
                     
                     shadow = QGraphicsDropShadowEffect()
-                    shadow.setBlurRadius(20)
-                    shadow.setColor(QColor(0, 0, 0, 120))
-                    shadow.setOffset(0, 4)
+                    shadow.setBlurRadius(30)
+                    shadow.setColor(QColor(0, 0, 0, 180))
                     self.content_widget.setGraphicsEffect(shadow)
 
-                    # --- ICON (Tăng size theo tỷ lệ) ---
-                    self.lbl_icon = QLabel(self.content_widget)
-                    self.lbl_icon.setScaledContents(True)
-                    pix = QPixmap(r"{app_icon_path}")
-                    self.lbl_icon.setPixmap(pix)
-                    # 35x35 -> 45x45
-                    self.lbl_icon.setGeometry(12, 12, 45, 45)
-                    self.lbl_icon.setStyleSheet("background: transparent; border: none;")
-
-                    # --- TEXT AREA ---
-                    self.text_area = QWidget(self.content_widget)
-                    self.text_area.setGeometry(65, 0, 200, 70)
-                    self.text_area.setStyleSheet("background: transparent; border: none;")
-
-                    # Dòng 1: Tiêu đề
-                    lbl_top = QLabel("GAME STARTED", self.text_area)
-                    lbl_top.move(0, 14)
-                    lbl_top.setStyleSheet("color: #CCCCCC; font-weight: bold; font-family: Segoe UI; font-size: 8px; letter-spacing: 1px;")
-
-                    # [UPDATE 3] TÊN GAME (To và Rõ hơn)
-                    lbl_name = QLabel(r"{game_name}", self.text_area)
-                    lbl_name.move(0, 25)
-                    # Font size 11 -> 13
-                    lbl_name.setStyleSheet("color: white; font-weight: bold; font-family: Segoe UI; font-size: 13px;")
-
-                    # Dòng 3: Subtitle
-                    lbl_sub = QLabel("Conist Launcher", self.text_area)
-                    lbl_sub.move(0, 46)
-                    lbl_sub.setStyleSheet("color: #00BCD4; font-style: italic; font-family: Segoe UI; font-size: 9px;")
-
-                    # --- TIMER ---
-                    self.sparkle_timer = QTimer(self)
-                    self.sparkle_timer.timeout.connect(self.add_sparkle)
-
-                    QTimer.singleShot(50, self.slide_in)
-                    QTimer.singleShot(4000, self.slide_out)
-
-                def add_sparkle(self):
-                    if self.width() > 100:
-                        SparkleDot(self.content_widget, self.target_width, self.height)
-
-                def slide_in(self):
-                    self.anim = QPropertyAnimation(self, b"geometry")
-                    self.anim.setDuration(700)
-                    self.anim.setStartValue(QRect(self.x_pos, self.y_pos, 0, self.height))
-                    self.anim.setEndValue(QRect(self.x_pos, self.y_pos, self.target_width, self.height))
-                    self.anim.setEasingCurve(QEasingCurve.OutExpo)
-                    self.anim.start()
+                    # --- [DUY NHẤT] ICON LAUNCHER ---
+                    self.ICON_SIZE = 60
+                    self.ICON_X = 10
+                    self.ICON_Y = 10
                     
-                    # Kim tuyến mật độ cao
-                    self.sparkle_timer.start(140)
+                    self.lbl_app = QLabel(self.content_widget)
+                    self.lbl_app.setScaledContents(True)
+                    pix_app = QPixmap(r"{app_icon_path}")
+                    self.lbl_app.setPixmap(pix_app)
+                    
+                    # Vị trí to, rõ ràng (Chiếm chỗ cũ của game icon)
+                    self.lbl_app.setGeometry(self.ICON_X, self.ICON_Y, self.ICON_SIZE, self.ICON_SIZE)
+                    self.lbl_app.setStyleSheet("background: transparent;")
+                    self.lbl_app.show()
 
-                def slide_out(self):
-                    self.sparkle_timer.stop()
-                    self.anim_out = QPropertyAnimation(self, b"geometry")
-                    self.anim_out.setDuration(500)
-                    self.anim_out.setStartValue(QRect(self.x_pos, self.y_pos, self.target_width, self.height))
-                    self.anim_out.setEndValue(QRect(self.x_pos, self.y_pos, 0, self.height))
-                    self.anim_out.setEasingCurve(QEasingCurve.InExpo)
-                    self.anim_out.finished.connect(self.close)
-                    self.anim_out.start()
+                    # [PREMIUM] Glow xanh băng giá cho Icon
+                    self.icon_glow = QGraphicsDropShadowEffect(self.lbl_app)
+                    self.icon_glow.setBlurRadius(0) # Bắt đầu chưa sáng
+                    self.icon_glow.setColor(QColor(0, 255, 255, 200)) # Màu Cyan
+                    self.icon_glow.setOffset(0, 0)
+                    self.lbl_app.setGraphicsEffect(self.icon_glow)
+
+                    # Hiệu ứng ẩn hiện (Opacity)
+                    self.opacity_eff = QGraphicsOpacityEffect(self.lbl_app)
+                    self.opacity_eff.setOpacity(0.0)
+                    # Lưu ý: Qt không cho set 2 effect cùng lúc dễ dàng, 
+                    # nên ta dùng Opacity cho icon, còn Glow ta sẽ fake bằng animation sau hoặc dùng cấu trúc lồng nhau.
+                    # Để đơn giản và đẹp: Ta dùng Opacity Effect bao trùm.
+                    self.lbl_app.setGraphicsEffect(self.opacity_eff)
+
+
+                    # --- TEXT ---
+                    self.text_area = QWidget(self.content_widget)
+                    self.text_area.setGeometry(85, 0, 290, 80)
+                    
+                    lbl_title = QLabel("POWERED BY", self.text_area)
+                    lbl_title.move(0, 20)
+                    lbl_title.setStyleSheet("color: #888888; font-weight: bold; font-family: Segoe UI; font-size: 9px; letter-spacing: 1px;")
+                    
+                    # Tên game to
+                    lbl_name = QLabel(r"{game_name}", self.text_area)
+                    lbl_name.move(0, 32)
+                    lbl_name.setStyleSheet("color: white; font-weight: bold; font-family: Segoe UI; font-size: 16px;")
+                    
+                    lbl_sub = QLabel("Chúc bạn chơi game vui vẻ!", self.text_area)
+                    lbl_sub.move(0, 56)
+                    lbl_sub.setStyleSheet("color: cyan; font-style: italic; font-family: Segoe UI; font-size: 11px;")
+
+                    # --- LOGIC ---
+                    self.timer_smoke = QTimer(self)
+                    self.timer_smoke.timeout.connect(self.emit_smoke)
+                    
+                    QTimer.singleShot(100, self.run_sequence)
+                    QTimer.singleShot(5000, self.close_sequence)
+
+                def emit_smoke(self):
+                    # Tạo khói rơi từ tâm icon
+                    cx = self.ICON_X + self.ICON_SIZE // 2
+                    cy = self.ICON_Y + self.ICON_SIZE // 2
+                    DryIceParticle(self.content_widget, cx, cy)
+
+                def run_sequence(self):
+                    # 1. Fade In Icon (Hiện dần)
+                    self.anim_fade = QPropertyAnimation(self.opacity_eff, b"opacity")
+                    self.anim_fade.setDuration(1000)
+                    self.anim_fade.setStartValue(0.0)
+                    self.anim_fade.setEndValue(1.0)
+                    self.anim_fade.setEasingCurve(QEasingCurve.OutQuad)
+                    self.anim_fade.start()
+
+                    # 2. Phun khói (Bắt đầu sau khi hiện 1 chút)
+                    self.timer_smoke.start(50) # Mật độ dày (50ms/hạt)
+                    
+                    # Dừng phun khói sau 2.5s
+                    QTimer.singleShot(2500, self.timer_smoke.stop)
+
+                def close_sequence(self):
+                    self.anim_close = QPropertyAnimation(self, b"windowOpacity")
+                    self.anim_close.setDuration(500)
+                    self.anim_close.setStartValue(1)
+                    self.anim_close.setEndValue(0)
+                    self.anim_close.finished.connect(self.close)
+                    self.anim_close.start()
 
             if __name__ == "__main__":
                 app = QApplication(sys.argv)
@@ -2489,12 +2338,10 @@ def main(page: ft.Page):
                 f.write(overlay_code)
             
             creation_flags = 0x08000000 if sys.platform == "win32" else 0
-            
-            # [SỬA LẠI] Gọi chính cái file EXE hiện tại (Vỏ), kèm theo đường dẫn script
-            # Cái Vỏ sẽ mở lên -> Nạp app_core -> Gặp đoạn code ở Bước 1 -> Chạy Overlay -> Tự sát
             subprocess.Popen([sys.executable, temp_file], creationflags=creation_flags)
             
         except Exception as e: print(f"Overlay Error: {e}")
+
 
 
 
@@ -4797,7 +4644,7 @@ def main(page: ft.Page):
 
     threading.Thread(target=idle_checker, daemon=True).start()
     threading.Thread(target=bg_download_icons, daemon=True).start()
-    start_global_game_watcher()
+
     if APP_CONFIG.get("auto_update_games", False):
         # [cite_start]Lúc này đang ở trong hàm main nên nó mới nhìn thấy process_game_updates_thread [cite: 99]
         threading.Thread(target=process_game_updates_thread, daemon=True).start()
@@ -4821,43 +4668,26 @@ def main(page: ft.Page):
 
 
 
-# [Thay thế toàn bộ đoạn cuối cùng của file test.txt]
-
 if __name__ == "__main__":
-    # --- [FIX BUG LOOP] KIỂM TRA CHẾ ĐỘ CHẠY SCRIPT (OVERLAY) ---
-    # Nếu exe được gọi kèm tham số là file .py (VD: overlay_run.py)
-    # Thì chạy nó như một script rồi thoát luôn, KHÔNG mở giao diện Launcher
-    if len(sys.argv) > 1 and sys.argv[1].endswith(".py"):
-        target_script = sys.argv[1]
-        try:
-            with open(target_script, "r", encoding="utf-8") as f:
-                code = f.read()
-            # Thực thi code của Overlay trong process này
-            exec(code, globals())
-        except Exception as e:
-            print(f"Error running script: {e}")
-        
-        # [QUAN TRỌNG] Thoát ngay lập tức để không chạy vào phần Mutex/Flet bên dưới
-        sys.exit(0)
-
-    # -----------------------------------------------------------
-    # NẾU KHÔNG PHẢI LÀ CHẠY SCRIPT -> CHẠY APP LAUNCHER BÌNH THƯỜNG
-    # -----------------------------------------------------------
 
     # --- [MẸO FIX ICON TASKBAR KHI CHẠY VS CODE] ---
+    # Đặt ID ngay khi Process Python vừa khởi động, trước cả khi Flet chạy
     myappid = 'conist.link.launcher.v2.dev' 
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
-    
-    # 1. Tạo khóa Mutex để chống mở nhiều Launcher cùng lúc
+    # -----------------------------------------------
+
+    # 1. Tạo một cái tên khóa độc nhất vô nhị
     mutex_id = "Global\\Conist_Launcher_v2_Unique_Lock"
+    
+    # 2. Thử tạo khóa
     mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_id)
     
-    # Kiểm tra xem khóa đã tồn tại chưa (Launcher đã mở rồi)
+    # 3. Kiểm tra xem khóa đã tồn tại chưa
     last_error = ctypes.windll.kernel32.GetLastError()
-    if last_error == 183: # ERROR_ALREADY_EXISTS
+    if last_error == 183:
         sys.exit(0)
     
-    # 2. Chạy App Flet
+    # 4. Nếu chưa chạy -> Chạy App bình thường
     ft.app(target=main, assets_dir=BASE_DATA_PATH)
