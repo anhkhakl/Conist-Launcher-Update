@@ -17,8 +17,13 @@ import asyncio
 import ctypes
 import time
 import concurrent.futures 
-import pystray
-from pystray import MenuItem as item
+try:
+    import pystray
+    from pystray import MenuItem as item
+    HAS_TRAY_LIB = True
+except ImportError:
+    HAS_TRAY_LIB = False
+    print("Warning: Chưa cài pystray -> Tắt tính năng chạy ngầm.")
 
 
 
@@ -1078,37 +1083,22 @@ def main(page: ft.Page):
 
 
 # --- [SỬA LẠI] LOGIC TẮT APP THÔNG MINH ---
+    # [Trong hàm on_window_event]
     def on_window_event(e):
         if e.data == "close":
-            # Kiểm tra xem có bật chế độ chạy ngầm không
+            # Kiểm tra: Phải BẬT trong Setting VÀ ĐÃ CÀI thư viện mới chạy ngầm
             run_bg = APP_CONFIG.get("run_in_background", False)
-
-            if run_bg:
+            
+            if run_bg and HAS_TRAY_LIB:
                 print(f"[SYSTEM] Ẩn xuống System Tray...")
                 page.window.visible = False
                 page.update()
-                
-                # Chạy Tray Icon trong luồng riêng để không treo App
                 threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
-                
-                # Bắn thông báo Windows nhắc người dùng (Optional)
-                # show_push_notification("App đang chạy ngầm ở góc màn hình!", "info") 
             else:
-                # --- LOGIC DỌN DẸP CŨ (GIỮ NGUYÊN) ---
+                # Nếu chưa cài thư viện hoặc tắt setting -> Tắt hẳn App
                 print(f"[EXIT] Đang dọn dẹp và tắt hẳn...")
-                
-                # 1. Hủy Download
                 if len(ACTIVE_DOWNLOADS) > 0:
                      for name, state in ACTIVE_DOWNLOADS.items(): state['cancelled'] = True
-                     import time
-                     time.sleep(1.0)
-                     for name, state in ACTIVE_DOWNLOADS.items():
-                        path = state.get('path')
-                        if path and os.path.exists(path):
-                            try: os.remove(path)
-                            except: pass
-
-                # 2. Tắt App
                 page.window.destroy()
 
     page.window.prevent_close = True 
