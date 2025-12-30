@@ -2082,7 +2082,7 @@ def main(page: ft.Page):
                 ft.Switch(label="Khởi động cùng Windows", value=check_startup_status(), on_change=on_startup_change),
                 ft.Container(height=5), # Khoảng cách nhỏ 5px
                 ft.Switch(
-                    label="Cho phép ẩn vào taskbar thoát", 
+                    label="Cho phép ẩn vào taskbar khi thoát", 
                     value=APP_CONFIG.get("run_in_background", False),
                     on_change=lambda e: (APP_CONFIG.update({"run_in_background": e.control.value}), save_config())
                 ),
@@ -4778,26 +4778,43 @@ def main(page: ft.Page):
 
 
 
+# [Thay thế toàn bộ đoạn cuối cùng của file test.txt]
+
 if __name__ == "__main__":
+    # --- [FIX BUG LOOP] KIỂM TRA CHẾ ĐỘ CHẠY SCRIPT (OVERLAY) ---
+    # Nếu exe được gọi kèm tham số là file .py (VD: overlay_run.py)
+    # Thì chạy nó như một script rồi thoát luôn, KHÔNG mở giao diện Launcher
+    if len(sys.argv) > 1 and sys.argv[1].endswith(".py"):
+        target_script = sys.argv[1]
+        try:
+            with open(target_script, "r", encoding="utf-8") as f:
+                code = f.read()
+            # Thực thi code của Overlay trong process này
+            exec(code, globals())
+        except Exception as e:
+            print(f"Error running script: {e}")
+        
+        # [QUAN TRỌNG] Thoát ngay lập tức để không chạy vào phần Mutex/Flet bên dưới
+        sys.exit(0)
+
+    # -----------------------------------------------------------
+    # NẾU KHÔNG PHẢI LÀ CHẠY SCRIPT -> CHẠY APP LAUNCHER BÌNH THƯỜNG
+    # -----------------------------------------------------------
 
     # --- [MẸO FIX ICON TASKBAR KHI CHẠY VS CODE] ---
-    # Đặt ID ngay khi Process Python vừa khởi động, trước cả khi Flet chạy
     myappid = 'conist.link.launcher.v2.dev' 
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
-    # -----------------------------------------------
-
-    # 1. Tạo một cái tên khóa độc nhất vô nhị
-    mutex_id = "Global\\Conist_Launcher_v2_Unique_Lock"
     
-    # 2. Thử tạo khóa
+    # 1. Tạo khóa Mutex để chống mở nhiều Launcher cùng lúc
+    mutex_id = "Global\\Conist_Launcher_v2_Unique_Lock"
     mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_id)
     
-    # 3. Kiểm tra xem khóa đã tồn tại chưa
+    # Kiểm tra xem khóa đã tồn tại chưa (Launcher đã mở rồi)
     last_error = ctypes.windll.kernel32.GetLastError()
-    if last_error == 183:
+    if last_error == 183: # ERROR_ALREADY_EXISTS
         sys.exit(0)
     
-    # 4. Nếu chưa chạy -> Chạy App bình thường
+    # 2. Chạy App Flet
     ft.app(target=main, assets_dir=BASE_DATA_PATH)
