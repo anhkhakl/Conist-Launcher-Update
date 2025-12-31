@@ -1,7 +1,8 @@
 import flet as ft
 import sys
 import os
-
+import subprocess
+import requests
 # --- [FIX BUG VỎ CŨ] LOGIC CƯỚP QUYỀN ĐIỀU KHIỂN ---
 # Vì Vỏ (EXE) không xử lý tham số dòng lệnh, ta phải xử lý ngay khi Vỏ nạp Core.
 if getattr(sys, 'frozen', False) and len(sys.argv) > 1:
@@ -25,7 +26,74 @@ if getattr(sys, 'frozen', False) and len(sys.argv) > 1:
         sys.exit(0)
 
 
+# --- CẤU HÌNH ---
+# Link tải file EXE mới (Đã có PyQt5) - Bạn nhớ thay link thật của bạn vào
+URL_NEW_SHELL = "https://github.com/anhkhakl/Conist-Launcher-Update/releases/download/v2.0.5/Conist_Link_Launcher_2.0.5_Final.exe"
 
+def update_shell_and_restart():
+    """Hàm tự nâng cấp Vỏ (EXE)"""
+    base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    current_exe = sys.executable
+    
+    # Tên file tạm và file rác
+    new_exe_path = os.path.join(base_path, "Launcher_New_Temp.exe")
+    old_exe_trash = os.path.join(base_path, "Launcher_Old.trash")
+
+    print("[UPDATE] Đang tải Vỏ mới...")
+    try:
+        # 1. Tải file mới về
+        res = requests.get(URL_NEW_SHELL, stream=True)
+        if res.status_code == 200:
+            with open(new_exe_path, "wb") as f:
+                for chunk in res.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        else:
+            print(f"Lỗi tải file: {res.status_code}")
+            return False
+
+        print("[UPDATE] Tải xong. Đang thay thế...")
+
+        # 2. Xử lý file rác cũ (nếu có)
+        if os.path.exists(old_exe_trash):
+            try: os.remove(old_exe_trash)
+            except: pass
+
+        # 3. "Phép thuật" Windows: Đổi tên file đang chạy
+        # Windows cho phép đổi tên file EXE đang chạy, nhưng không cho xóa.
+        os.rename(current_exe, old_exe_trash)
+
+        # 4. Đưa file mới vào vị trí cũ
+        os.rename(new_exe_path, current_exe)
+
+        # 5. Khởi động lại App mới
+        print("[UPDATE] Khởi động lại...")
+        subprocess.Popen([current_exe])
+        
+        # 6. Tự sát (Tắt App cũ)
+        sys.exit(0)
+
+    except Exception as e:
+        print(f"[ERROR] Lỗi Update: {e}")
+        # Nếu lỗi, cố gắng phục hồi tên file cũ
+        if os.path.exists(old_exe_trash) and not os.path.exists(current_exe):
+            try: os.rename(old_exe_trash, current_exe)
+            except: pass
+        return False
+
+# --- LOGIC KIỂM TRA MÔI TRƯỜNG ---
+def check_environment():
+    # Chỉ chạy update nếu đang ở dạng đóng gói (Frozen/EXE)
+    if getattr(sys, 'frozen', False):
+        try:
+            import PyQt5
+            # Nếu import thành công -> Vỏ xịn -> Không làm gì cả
+        except ImportError:
+            # Nếu lỗi -> Vỏ cũ thiếu PyQt5 -> Bắt đầu update
+            print("[SYSTEM] Vỏ cũ thiếu thư viện. Kích hoạt Update...")
+            update_shell_and_restart()
+
+# --- GỌI HÀM KIỂM TRA NGAY KHI NẠP CORE ---
+check_environment()
 
 
 
