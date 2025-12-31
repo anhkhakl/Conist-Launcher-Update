@@ -3,112 +3,6 @@ import sys
 import os
 import subprocess
 import requests
-# --- [HIJACK V2] CƯỚP QUYỀN VÀ GHI LOG (DEBUG) ---
-if getattr(sys, 'frozen', False) and len(sys.argv) > 1:
-    target_arg = sys.argv[1]
-    
-    # Chỉ xử lý nếu tham số là file .py (Overlay Script)
-    if target_arg.endswith(".py") and os.path.exists(target_arg):
-        debug_path = os.path.join(os.path.dirname(sys.executable), "debug_overlay.txt")
-        try:
-            # Ghi log để biết là nó ĐÃ CHẠY vào đây
-            with open(debug_path, "w") as log:
-                log.write(f"Timestamp: {time.time()}\nTarget: {target_arg}\n")
-                
-                # 1. Đọc code overlay
-                with open(target_arg, "r", encoding="utf-8") as f:
-                    script_content = f.read()
-                log.write("Read script success.\n")
-                
-                # 2. Thử import PyQt5 xem có lỗi không
-                try:
-                    import PyQt5
-                    import PyQt5.QtWidgets
-                    log.write("Import PyQt5 SUCCESS.\n")
-                except ImportError as e:
-                    log.write(f"Import PyQt5 FAILED: {e}\n")
-                    # Nếu thiếu PyQt5 thì không chạy tiếp nữa để tránh crash
-                    sys.exit(1)
-
-                # 3. Chạy Overlay
-                log.write("Executing overlay...\n")
-                exec(script_content, globals())
-                log.write("Execution finished.\n")
-            
-        except Exception as e:
-            with open(debug_path, "a") as log:
-                log.write(f"CRITICAL ERROR: {e}\n")
-            
-        # [QUAN TRỌNG] Thoát ngay lập tức
-        sys.exit(0)
-
-# --- CẤU HÌNH UPDATE VỎ ---
-URL_NEW_SHELL = "https://github.com/anhkhakl/Conist-Launcher-Update/releases/download/v2.0.5/Conist_Link_Launcher_2.0.5_Final.exe"
-
-def update_shell_and_restart():
-    """Hàm tự nâng cấp Vỏ (EXE)"""
-    base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-    current_exe = sys.executable
-    
-    # Tên file tạm và file rác
-    new_exe_path = os.path.join(base_path, "Launcher_New_Temp.exe")
-    old_exe_trash = os.path.join(base_path, "Launcher_Old.trash")
-
-    print("[UPDATE] Đang tải Vỏ mới...")
-    try:
-        # 1. Tải file mới về
-        res = requests.get(URL_NEW_SHELL, stream=True)
-        if res.status_code == 200:
-            with open(new_exe_path, "wb") as f:
-                for chunk in res.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        else:
-            print(f"Lỗi tải file: {res.status_code}")
-            return False
-
-        print("[UPDATE] Tải xong. Đang thay thế...")
-
-        # 2. Xử lý file rác cũ (nếu có)
-        if os.path.exists(old_exe_trash):
-            try: os.remove(old_exe_trash)
-            except: pass
-
-        # 3. "Phép thuật" Windows: Đổi tên file đang chạy
-        # Windows cho phép đổi tên file EXE đang chạy, nhưng không cho xóa.
-        os.rename(current_exe, old_exe_trash)
-
-        # 4. Đưa file mới vào vị trí cũ
-        os.rename(new_exe_path, current_exe)
-
-        # 5. Khởi động lại App mới
-        print("[UPDATE] Khởi động lại...")
-        subprocess.Popen([current_exe])
-        
-        # 6. Tự sát (Tắt App cũ)
-        sys.exit(0)
-
-    except Exception as e:
-        print(f"[ERROR] Lỗi Update: {e}")
-        # Nếu lỗi, cố gắng phục hồi tên file cũ
-        if os.path.exists(old_exe_trash) and not os.path.exists(current_exe):
-            try: os.rename(old_exe_trash, current_exe)
-            except: pass
-        return False
-
-# --- LOGIC KIỂM TRA MÔI TRƯỜNG ---
-def check_environment():
-    # Chỉ chạy update nếu đang ở dạng đóng gói (Frozen/EXE)
-    if getattr(sys, 'frozen', False):
-        try:
-            import PyQt5
-            # Nếu import thành công -> Vỏ xịn -> Không làm gì cả
-        except ImportError:
-            # Nếu lỗi -> Vỏ cũ thiếu PyQt5 -> Bắt đầu update
-            print("[SYSTEM] Vỏ cũ thiếu thư viện. Kích hoạt Update...")
-            update_shell_and_restart()
-
-# --- GỌI HÀM KIỂM TRA NGAY KHI NẠP CORE ---
-check_environment()
 
 
 
@@ -1095,7 +989,7 @@ def run_system_tray(page):
 
 def main(page: ft.Page):
     # --- CHECK TRẠNG THÁI UPDATE ---
-    has_pyqt5 = False
+    page.title = f"Conist Link Launcher v{CURRENT_VERSION}"
     try:
         import PyQt5
         has_pyqt5 = True
@@ -1378,90 +1272,6 @@ def main(page: ft.Page):
 
 
 
-# --- [NEW] GLOBAL WATCHER: TỰ HIỆN OVERLAY KHI MỞ TỪ FOLDER ---
-    def start_global_game_watcher():
-        import ctypes
-        from ctypes import wintypes
-        
-        print("[GLOBAL WATCHER] Đã kích hoạt chế độ rình game...")
-        
-        def worker():
-            while True:
-                try:
-                    # 1. Lấy danh sách tất cả cửa sổ đang hiện
-                    visible_windows = []
-                    
-                    EnumWindows = ctypes.windll.user32.EnumWindows
-                    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-                    GetWindowText = ctypes.windll.user32.GetWindowTextW
-                    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-                    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
-                    GetWindowRect = ctypes.windll.user32.GetWindowRect
-                    
-                    def foreach_window(hwnd, lParam):
-                        if IsWindowVisible(hwnd):
-                            length = GetWindowTextLength(hwnd)
-                            if length > 0:
-                                buff = ctypes.create_unicode_buffer(length + 1)
-                                GetWindowText(hwnd, buff, length + 1)
-                                title = buff.value
-                                visible_windows.append((hwnd, title))
-                        return True
-                    
-                    EnumWindows(EnumWindowsProc(foreach_window), 0)
-
-                    # 2. So khớp với GAME_LIST
-                    current_running = set()
-                    
-                    for hwnd, title in visible_windows:
-                        title_lower = title.lower()
-                        
-                        for game in GAME_LIST:
-                            g_name = game['name']
-                            # Tạo slug để so sánh chính xác hơn (bỏ ký tự đặc biệt)
-                            clean_target = clean_name_for_slug(g_name).replace("_", " ")
-                            
-                            # LOGIC SO SÁNH: Tên game nằm trong Tên cửa sổ
-                            if clean_target in title_lower or g_name.lower() in title_lower:
-                                
-                                # Lấy tọa độ
-                                rect = wintypes.RECT()
-                                GetWindowRect(hwnd, ctypes.byref(rect))
-                                w = rect.right - rect.left
-                                
-                                # Chỉ bắt cửa sổ game thật (Rộng > 600px) để tránh bắt nhầm cửa sổ con
-                                if w > 600:
-                                    current_running.add(g_name)
-                                    
-                                    # Nếu game này CHƯA có trong danh sách đã báo -> HIỆN OVERLAY
-                                    if g_name not in active_game_sessions:
-                                        print(f"[AUTO DETECT] Phát hiện game: {g_name}")
-                                        
-                                        # Tính tọa độ
-                                        gx = rect.left
-                                        gy = rect.top
-                                        icon_path = game.get('icon', '').replace("\\", "/")
-                                        
-                                        # Gọi Overlay Xịn
-                                        show_game_overlay(g_name, icon_path, gx, gy)
-                                        
-                                        # Đánh dấu đã báo
-                                        active_game_sessions.add(g_name)
-
-                    # 3. Dọn dẹp: Nếu game tắt rồi thì xóa khỏi session để lần sau mở lại còn báo tiếp
-                    # (Dùng copy để tránh lỗi khi đang lặp)
-                    for old_game in list(active_game_sessions):
-                        if old_game not in current_running:
-                            active_game_sessions.remove(old_game)
-                            # print(f"[AUTO DETECT] Game đã tắt: {old_game}")
-
-                except Exception as e:
-                    print(f"Global Watcher Error: {e}")
-                
-                # Nghỉ 2 giây rồi quét tiếp (đỡ tốn RAM)
-                time.sleep(2)
-
-        threading.Thread(target=worker, daemon=True).start()
 
 
 # --- [DÁN ĐOẠN NÀY VÀO NGAY SAU process_game_updates_thread] ---
@@ -2255,21 +2065,6 @@ def main(page: ft.Page):
 
 
 
-            
-            # [NEW] NÚT TEST OVERLAY
-            ft.ElevatedButton(
-                "Test Overlay (Debug)",
-                icon=ft.icons.LAYERS,
-                bgcolor="#555555", color="white",
-                on_click=lambda e: show_game_overlay("Test Game", "", 100, 100)
-            ),
-            
-            ft.Container(height=10),
-
-
-
-
-
 
 
             # --- CỤM NÚT BẤM ---
@@ -2451,400 +2246,10 @@ def main(page: ft.Page):
 
 
 
-# ==========================================
-    # [V46 FINAL] OVERLAY PYQT5: WIRED DEBUG MODE (HIỆN KHUNG ĐỂ SOI)
-    # ==========================================
-
-    def show_game_overlay(game_name, icon_path, game_x=0, game_y=0):
-        """Chạy Overlay: Chế độ 'Glass Pro' (Size vừa vặn - Xuyên thấu - Tên Game Rõ)"""
-        import subprocess
-        import sys
-        import textwrap
-        
-        app_icon_path = os.path.join(get_base_path(), "Launcher_Data", "app_icon.ico").replace("\\", "/")
-        
-        # Vị trí
-        pos_left = game_x + 20
-        pos_top = game_y + 20
-        if pos_left < 0: pos_left = 20
-        if pos_top < 0: pos_top = 20
-
-        overlay_code = textwrap.dedent(f"""
-            import sys
-            import os
-            import random
-            try:
-                from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QFrame, QGraphicsOpacityEffect, QGraphicsDropShadowEffect
-                from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QEasingCurve
-                from PyQt5.QtGui import QPixmap, QColor
-            except ImportError:
-                sys.exit(1)
-
-            class SparkleDot(QFrame):
-                def __init__(self, parent, max_w, max_h):
-                    super().__init__(parent)
-                    size = random.choice([2, 3])
-                    self.setGeometry(0, 0, size, size)
-                    color = random.choice(["#FFFFFF", "#FFFFE0", "#E0FFFF"])
-                    self.setStyleSheet(f"background-color: {{color}}; border-radius: {{size//2}}px;")
-                    
-                    rx = random.randint(5, max_w - 5)
-                    ry = random.randint(5, max_h - 5)
-                    self.move(rx, ry)
-                    self.show()
-
-                    self.eff = QGraphicsOpacityEffect(self)
-                    self.setGraphicsEffect(self.eff)
-                    
-                    self.anim = QPropertyAnimation(self.eff, b"opacity")
-                    self.anim.setDuration(random.randint(600, 1000))
-                    self.anim.setStartValue(0.0)
-                    self.anim.setKeyValueAt(0.5, 1.0)
-                    self.anim.setEndValue(0.0)
-                    self.anim.setEasingCurve(QEasingCurve.InOutSine)
-                    self.anim.finished.connect(self.deleteLater)
-                    self.anim.start()
-
-            class GameOverlay(QWidget):
-                def __init__(self):
-                    super().__init__()
-                    self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
-                    self.setAttribute(Qt.WA_TranslucentBackground)
-                    
-                    # [UPDATE 1] KÍCH THƯỚC TĂNG 20% (So với bản nhỏ)
-                    # 230x55 -> 280x70
-                    self.target_width = 280
-                    self.height = 70
-                    self.x_pos = {pos_left}
-                    self.y_pos = {pos_top}
-                    
-                    self.setGeometry(self.x_pos, self.y_pos, 0, self.height)
-
-                    # --- CONTAINER ---
-                    self.content_widget = QWidget(self)
-                    self.content_widget.setGeometry(0, 0, self.target_width, self.height)
-                    
-                    # [UPDATE 2] TĂNG ĐỘ TRONG SUỐT (Thêm 10%)
-                    # Mã màu #80151515 (Alpha 80 ~ 50% Opacity) - Trong hơn bản cũ (A0)
-                    self.content_widget.setStyleSheet(\"""
-                        background-color: #80151515; 
-                        border: 1px solid #55555555; 
-                        border-radius: 10px;
-                    \""")
-                    
-                    shadow = QGraphicsDropShadowEffect()
-                    shadow.setBlurRadius(20)
-                    shadow.setColor(QColor(0, 0, 0, 120))
-                    shadow.setOffset(0, 4)
-                    self.content_widget.setGraphicsEffect(shadow)
-
-                    # --- ICON (Tăng size theo tỷ lệ) ---
-                    self.lbl_icon = QLabel(self.content_widget)
-                    self.lbl_icon.setScaledContents(True)
-                    pix = QPixmap(r"{app_icon_path}")
-                    self.lbl_icon.setPixmap(pix)
-                    # 35x35 -> 45x45
-                    self.lbl_icon.setGeometry(12, 12, 45, 45)
-                    self.lbl_icon.setStyleSheet("background: transparent; border: none;")
-
-                    # --- TEXT AREA ---
-                    self.text_area = QWidget(self.content_widget)
-                    self.text_area.setGeometry(65, 0, 200, 70)
-                    self.text_area.setStyleSheet("background: transparent; border: none;")
-
-                    # Dòng 1: Tiêu đề
-                    lbl_top = QLabel("GAME STARTED", self.text_area)
-                    lbl_top.move(0, 14)
-                    lbl_top.setStyleSheet("color: #CCCCCC; font-weight: bold; font-family: Segoe UI; font-size: 8px; letter-spacing: 1px;")
-
-                    # [UPDATE 3] TÊN GAME (To và Rõ hơn)
-                    lbl_name = QLabel(r"{game_name}", self.text_area)
-                    lbl_name.move(0, 25)
-                    # Font size 11 -> 13
-                    lbl_name.setStyleSheet("color: white; font-weight: bold; font-family: Segoe UI; font-size: 13px;")
-
-                    # Dòng 3: Subtitle
-                    lbl_sub = QLabel("Conist Launcher", self.text_area)
-                    lbl_sub.move(0, 46)
-                    lbl_sub.setStyleSheet("color: #00BCD4; font-style: italic; font-family: Segoe UI; font-size: 9px;")
-
-                    # --- TIMER ---
-                    self.sparkle_timer = QTimer(self)
-                    self.sparkle_timer.timeout.connect(self.add_sparkle)
-
-                    QTimer.singleShot(50, self.slide_in)
-                    QTimer.singleShot(4000, self.slide_out)
-
-                def add_sparkle(self):
-                    if self.width() > 100:
-                        SparkleDot(self.content_widget, self.target_width, self.height)
-
-                def slide_in(self):
-                    self.anim = QPropertyAnimation(self, b"geometry")
-                    self.anim.setDuration(700)
-                    self.anim.setStartValue(QRect(self.x_pos, self.y_pos, 0, self.height))
-                    self.anim.setEndValue(QRect(self.x_pos, self.y_pos, self.target_width, self.height))
-                    self.anim.setEasingCurve(QEasingCurve.OutExpo)
-                    self.anim.start()
-                    
-                    # Kim tuyến mật độ cao
-                    self.sparkle_timer.start(140)
-
-                def slide_out(self):
-                    self.sparkle_timer.stop()
-                    self.anim_out = QPropertyAnimation(self, b"geometry")
-                    self.anim_out.setDuration(500)
-                    self.anim_out.setStartValue(QRect(self.x_pos, self.y_pos, self.target_width, self.height))
-                    self.anim_out.setEndValue(QRect(self.x_pos, self.y_pos, 0, self.height))
-                    self.anim_out.setEasingCurve(QEasingCurve.InExpo)
-                    self.anim_out.finished.connect(self.close)
-                    self.anim_out.start()
-
-            if __name__ == "__main__":
-                app = QApplication(sys.argv)
-                window = GameOverlay()
-                window.show()
-                sys.exit(app.exec_())
-        """).strip()
-
-        try:
-            temp_file = os.path.join(get_base_path(), "Launcher_Data", "overlay_run.py")
-            with open(temp_file, "w", encoding="utf-8") as f:
-                f.write(overlay_code)
-            
-            creation_flags = 0x08000000 if sys.platform == "win32" else 0
-            
-            # [SỬA LẠI] Gọi chính cái file EXE hiện tại (Vỏ), kèm theo đường dẫn script
-            # Cái Vỏ sẽ mở lên -> Nạp app_core -> Gặp đoạn code ở Bước 1 -> Chạy Overlay -> Tự sát
-            subprocess.Popen([sys.executable, temp_file], creationflags=creation_flags)
-            
-        except Exception as e: print(f"Overlay Error: {e}")
 
 
 
 
-
-
-
-
-
-
-
-
-        
-
-    # ==========================================
-    # [FIX WATCHER] THỢ SĂN BIẾT LẤY TỌA ĐỘ (CẦN CHO OVERLAY V44)
-    # ==========================================
-    def start_smart_overlay_watcher(game_name, icon_path):
-        """Rình cửa sổ game -> Lôi lên -> Lấy tọa độ -> Bật Overlay"""
-        import ctypes
-        from ctypes import wintypes # Cần cái này để lấy Rect chuẩn
-        
-        clean_target = clean_name_for_slug(game_name).replace("_", " ")
-
-        def worker():
-            print(f"[WATCHER] Đang rình game: {game_name}...")
-            
-            for _ in range(180): 
-                try:
-                    EnumWindows = ctypes.windll.user32.EnumWindows
-                    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-                    GetWindowText = ctypes.windll.user32.GetWindowTextW
-                    GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
-                    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
-                    GetWindowRect = ctypes.windll.user32.GetWindowRect
-                    
-                    ShowWindow = ctypes.windll.user32.ShowWindow
-                    SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
-                    
-                    found = False
-                    
-                    def foreach_window(hwnd, lParam):
-                        nonlocal found
-                        if IsWindowVisible(hwnd):
-                            length = GetWindowTextLength(hwnd)
-                            if length > 0:
-                                buff = ctypes.create_unicode_buffer(length + 1)
-                                GetWindowText(hwnd, buff, length + 1)
-                                title = buff.value.lower()
-                                
-                                if (clean_target in title or game_name.lower() in title):
-                                    # [QUAN TRỌNG] Lấy tọa độ cửa sổ game
-                                    rect = wintypes.RECT()
-                                    GetWindowRect(hwnd, ctypes.byref(rect))
-                                    w = rect.right - rect.left
-                                    
-                                    # Chỉ bắt cửa sổ game thật (>600px)
-                                    if w > 600:
-                                        print(f"[WATCHER] Bắt được: {buff.value} tại ({rect.left}, {rect.top})")
-                                        
-                                        # 1. Lôi game lên trên cùng
-                                        ShowWindow(hwnd, 9) 
-                                        SetForegroundWindow(hwnd)
-                                        
-                                        # 2. Lấy tọa độ X, Y
-                                        game_x = rect.left
-                                        game_y = rect.top
-                                        
-                                        # 3. Gọi Overlay với ĐẦY ĐỦ 4 THAM SỐ
-                                        time.sleep(1)
-                                        show_game_overlay(game_name, icon_path, game_x, game_y)
-                                        
-                                        found = True
-                                        return False
-                        return True
-
-                    EnumWindows(EnumWindowsProc(foreach_window), 0)
-                    if found: break
-                    
-                except Exception as e:
-                    print(f"Watcher Error: {e}")
-                    
-                time.sleep(1)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    # [3] HÀM XỬ LÝ CHƠI GAME (GIỮ NGUYÊN NHƯNG ĐẶT Ở DƯỚI CÙNG ĐỂ KHÔNG LỖI)
-    def handle_play_game(game_name, e, spinner, status_txt, btn_play, progress_overlay, icon_src=""):
-        # Setup UI
-        btn_play.visible = False
-        spinner.visible = True
-        status_txt.value = "Đang xử lý..."
-        status_txt.color = "white"
-        progress_overlay.width = 0 
-        
-        btn_play.update()
-        spinner.update()
-        status_txt.update()
-        progress_overlay.update()
-
-        def extract_thread():
-            import zipfile
-            import subprocess
-            import time
-            import ctypes
-            
-            save_path = APP_CONFIG.get("download_dir")
-            slug = clean_name_for_slug(game_name)
-            archive_file = os.path.join(save_path, f"{slug}.zip")
-            extract_folder = os.path.join(save_path, slug)
-
-            try:
-                # --- GIAI ĐOẠN 1: GIẢI NÉN ---
-                if os.path.exists(archive_file):
-                    status_txt.value = "Đang giải nén..."
-                    status_txt.update()
-                    is_extracted = False
-                    
-                    if zipfile.is_zipfile(archive_file):
-                        try:
-                            with zipfile.ZipFile(archive_file, 'r') as zf:
-                                file_list = zf.infolist()
-                                total_size = sum([f.file_size for f in file_list])
-                                extracted_size = 0
-                                for file in file_list:
-                                    zf.extract(file, extract_folder, pwd=b"linkneverdie.com")
-                                    extracted_size += file.file_size
-                                    ratio = extracted_size / max(total_size, 1)
-                                    progress_overlay.width = 380 * ratio 
-                                    progress_overlay.update()
-                            is_extracted = True
-                        except: pass 
-                    
-                    if not is_extracted:
-                        status_txt.value = "WinRAR đang chạy..."
-                        status_txt.update()
-                        winrar_exe = r"C:\Program Files\WinRAR\WinRAR.exe"
-                        if not os.path.exists(winrar_exe): winrar_exe = r"C:\Program Files (x86)\WinRAR\WinRAR.exe"
-                        
-                        if os.path.exists(winrar_exe):
-                            cmd = [winrar_exe, "x", "-pLinkNeverDie.Com", "-plinkneverdie.com", "-ibck", "-y", archive_file, extract_folder + "\\"]
-                            process = subprocess.Popen(cmd, shell=True)
-                            fake_w = 0
-                            while process.poll() is None:
-                                if fake_w < 340: fake_w += 5
-                                progress_overlay.width = fake_w
-                                progress_overlay.update()
-                                time.sleep(0.1)
-                            is_extracted = True
-                        else: raise Exception("Cần cài WinRAR!")
-                    try: os.remove(archive_file)
-                    except: pass
-                
-                # --- GIAI ĐOẠN 2: TÌM FILE GAME ---
-                status_txt.value = "Đang tìm file chạy..."
-                status_txt.update()
-                
-                target_exe = None
-                black_list = ["unitycrashhandler", "uninstall", "update", "dxsetup", "vcredist", "cleanup", "redist"]
-                candidates = [] 
-
-                for root, dirs, files in os.walk(extract_folder):
-                    for file in files:
-                        if file.lower().endswith(".exe"):
-                            full_path = os.path.join(root, file)
-                            lower_name = file.lower()
-                            if any(x in lower_name for x in black_list): continue
-                            
-                            score = 0
-                            if lower_name.endswith("lnd game launcher.exe"): score = 10000
-                            clean_game = clean_name_for_slug(game_name).replace("_", "")
-                            clean_file = lower_name.replace(".exe", "").replace("_", "").replace(".", "").replace(" ", "")
-                            if clean_game in clean_file: score += 100
-                            if "launcher" in lower_name: score += 50
-                            candidates.append((score, full_path))
-
-                if candidates:
-                    candidates.sort(key=lambda x: x[0], reverse=True)
-                    target_exe = candidates[0][1]
-
-                # --- GIAI ĐOẠN 3: CHẠY GAME + WATCHER ---
-                if target_exe:
-                    status_txt.value = "Đang khởi động..."
-                    status_txt.color = "green"
-                    status_txt.update()
-                    
-                    # [QUAN TRỌNG] Gọi Thợ Săn để rình game lên
-                    clean_icon = icon_src.replace("\\", "/") if icon_src else ""
-                    start_smart_overlay_watcher(game_name, clean_icon)
-
-                    working_dir = os.path.dirname(target_exe)
-                    try:
-                        subprocess.Popen([target_exe], cwd=working_dir)
-                    except OSError as err:
-                        if err.winerror == 740:
-                            status_txt.value = "Yêu cầu quyền Admin..."
-                            status_txt.update()
-                            ctypes.windll.shell32.ShellExecuteW(None, "runas", target_exe, None, working_dir, 1)
-                        else: raise err
-                else:
-                    status_txt.value = "Lỗi: Không thấy EXE!"
-                    status_txt.color = "red"
-                    show_push_notification("Không tìm thấy file game!", "error")
-                    os.startfile(extract_folder)
-
-            except Exception as e:
-                status_txt.value = f"Lỗi: {str(e)[:15]}..."
-                status_txt.color = "red"
-                try: os.startfile(save_path)
-                except: pass
-            
-            # Reset UI sau 3s
-            time.sleep(3)
-            try:
-                btn_play.visible = True
-                spinner.visible = False
-                progress_overlay.width = 0 
-                status_txt.value = "Sẵn sàng chơi"
-                status_txt.color = "#AAAAAA"
-                btn_play.update()
-                spinner.update()
-                status_txt.update()
-                progress_overlay.update()
-            except: pass
-
-        threading.Thread(target=extract_thread, daemon=True).start()
 
 
 
@@ -2980,9 +2385,6 @@ def main(page: ft.Page):
                     status_txt.color = "green"
                     status_txt.update()
                     
-                    # [QUAN TRỌNG] Gọi Thợ Săn để rình game lên
-                    clean_icon = icon_src.replace("\\", "/") if icon_src else ""
-                    start_smart_overlay_watcher(game_name, clean_icon)
 
                     working_dir = os.path.dirname(target_exe)
                     try:
@@ -4921,7 +4323,6 @@ def main(page: ft.Page):
 
     threading.Thread(target=idle_checker, daemon=True).start()
     threading.Thread(target=bg_download_icons, daemon=True).start()
-    start_global_game_watcher()
     if APP_CONFIG.get("auto_update_games", False):
         # [cite_start]Lúc này đang ở trong hàm main nên nó mới nhìn thấy process_game_updates_thread [cite: 99]
         threading.Thread(target=process_game_updates_thread, daemon=True).start()
@@ -4948,40 +4349,20 @@ def main(page: ft.Page):
 # [Thay thế toàn bộ đoạn cuối cùng của file test.txt]
 
 if __name__ == "__main__":
-    # --- [FIX BUG LOOP] KIỂM TRA CHẾ ĐỘ CHẠY SCRIPT (OVERLAY) ---
-    # Nếu exe được gọi kèm tham số là file .py (VD: overlay_run.py)
-    # Thì chạy nó như một script rồi thoát luôn, KHÔNG mở giao diện Launcher
-    if len(sys.argv) > 1 and sys.argv[1].endswith(".py"):
-        target_script = sys.argv[1]
-        try:
-            with open(target_script, "r", encoding="utf-8") as f:
-                code = f.read()
-            # Thực thi code của Overlay trong process này
-            exec(code, globals())
-        except Exception as e:
-            print(f"Error running script: {e}")
-        
-        # [QUAN TRỌNG] Thoát ngay lập tức để không chạy vào phần Mutex/Flet bên dưới
-        sys.exit(0)
-
-    # -----------------------------------------------------------
-    # NẾU KHÔNG PHẢI LÀ CHẠY SCRIPT -> CHẠY APP LAUNCHER BÌNH THƯỜNG
-    # -----------------------------------------------------------
-
-    # --- [MẸO FIX ICON TASKBAR KHI CHẠY VS CODE] ---
-    myappid = 'conist.link.launcher.v2.dev' 
+    # 1. Fix Icon Taskbar (Chỉ hiệu quả khi chạy source code)
     try:
+        myappid = 'conist.link.launcher.v2.live' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
     
-    # 1. Tạo khóa Mutex để chống mở nhiều Launcher cùng lúc
+    # 2. Khóa Mutex (Chống mở 2 Launcher cùng lúc)
     mutex_id = "Global\\Conist_Launcher_v2_Unique_Lock"
-    mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_id)
+    try:
+        mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_id)
+        last_error = ctypes.windll.kernel32.GetLastError()
+        if last_error == 183: # ERROR_ALREADY_EXISTS
+            sys.exit(0)
+    except: pass
     
-    # Kiểm tra xem khóa đã tồn tại chưa (Launcher đã mở rồi)
-    last_error = ctypes.windll.kernel32.GetLastError()
-    if last_error == 183: # ERROR_ALREADY_EXISTS
-        sys.exit(0)
-    
-    # 2. Chạy App Flet
+    # 3. Chạy App Flet
     ft.app(target=main, assets_dir=BASE_DATA_PATH)
