@@ -1,27 +1,10 @@
+# [COPY VÀO DÒNG 1 CỦA app_core.py]
 import flet as ft
 import sys
 import os
 import subprocess
 import requests
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import json
-import requests
-from bs4 import BeautifulSoup
 import re
 import threading
 import time
@@ -29,12 +12,17 @@ import webbrowser
 import winreg as reg
 import winsound
 import random
-from PIL import Image
 import shutil
 import asyncio
 import ctypes
-import time
-import concurrent.futures 
+import concurrent.futures
+import math     # <--- Fix lỗi math
+import ast      # <--- Fix lỗi ast
+import zipfile  # <--- Fix lỗi zipfile
+from bs4 import BeautifulSoup
+from PIL import Image
+
+# Thử import pystray (Tray Icon)
 try:
     import pystray
     from pystray import MenuItem as item
@@ -132,11 +120,7 @@ def handle_self_update(new_exe_path):
     3. App Cũ bật App Mới lên.
     4. App Cũ tự sát.
     """
-    import subprocess
-    import sys
-    import os
-    import shutil
-    
+
     print(f"[UPDATE] Bắt đầu chuyển giao quyền lực: {new_exe_path}")
     
     if getattr(sys, 'frozen', False):
@@ -238,7 +222,7 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 
 
-CURRENT_VERSION = "2.0.3"
+CURRENT_VERSION = "2.0.4"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -426,7 +410,6 @@ def save_config():
             json.dump(APP_CONFIG, f, indent=4)
     except: pass
 
-import ast # Thư viện giúp đọc list Python từ file text (đọc được None)
 
 # ==========================================
 # [NEW] HỆ THỐNG DATA TỰ ĐỘNG (FORMAT PYTHON RAW)
@@ -943,7 +926,6 @@ def run_system_tray(page):
         page.window.always_on_top = True # Đẩy lên trên cùng
         page.update()
         
-        import time
         time.sleep(0.1)
         page.window.always_on_top = False # Trả lại trạng thái bình thường
         page.update()
@@ -988,14 +970,6 @@ def run_system_tray(page):
 # ==========================================
 
 def main(page: ft.Page):
-    # --- CHECK TRẠNG THÁI UPDATE ---
-    page.title = f"Conist Link Launcher v{CURRENT_VERSION}"
-    try:
-        import PyQt5
-        has_pyqt5 = True
-        print("[SYSTEM] PyQt5 Loaded - Chế độ PRO")
-    except ImportError:
-        print("[SYSTEM] Thiếu PyQt5 - Đang dùng Vỏ Cũ")
     cleanup_old_versions()
     
     # 1. Lấy đường dẫn gốc (Lúc này nó sẽ trỏ đúng về Desktop/Conist Link)
@@ -1113,24 +1087,25 @@ def main(page: ft.Page):
 
 
 
-
-# --- [SỬA LẠI] LOGIC TẮT APP THÔNG MINH ---
-    # [Trong hàm on_window_event]
     def on_window_event(e):
         if e.data == "close":
-            # Kiểm tra: Phải BẬT trong Setting VÀ ĐÃ CÀI thư viện mới chạy ngầm
+            # 1. Gửi tín hiệu HỦY cho toàn bộ download đang chạy
+            if ACTIVE_DOWNLOADS:
+                print("Đang dừng các tiến trình tải...")
+                for name, state in list(ACTIVE_DOWNLOADS.items()):
+                    state['cancelled'] = True
+                
+                # Chờ 0.5s cho các luồng kịp đóng file
+                time.sleep(0.5)
+
+            # 2. Xử lý tắt App
             run_bg = APP_CONFIG.get("run_in_background", False)
-            
             if run_bg and HAS_TRAY_LIB:
-                print(f"[SYSTEM] Ẩn xuống System Tray...")
+                # ... (giữ nguyên logic ẩn tray) ...
                 page.window.visible = False
                 page.update()
                 threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
             else:
-                # Nếu chưa cài thư viện hoặc tắt setting -> Tắt hẳn App
-                print(f"[EXIT] Đang dọn dẹp và tắt hẳn...")
-                if len(ACTIVE_DOWNLOADS) > 0:
-                     for name, state in ACTIVE_DOWNLOADS.items(): state['cancelled'] = True
                 page.window.destroy()
 
     page.window.prevent_close = True 
@@ -1156,10 +1131,7 @@ def main(page: ft.Page):
     page.window.visible = False 
     page.window.always_on_top = True
     # [SỬA] Đổi tên cửa sổ dựa trên trạng thái
-    if has_pyqt5:
-        page.title = f"Conist Link Launcher v{CURRENT_VERSION}"
-    else:
-        page.title = f"Conist Link Launcher v{CURRENT_VERSION} Zero"
+    page.title = f"Conist Link Launcher v{CURRENT_VERSION}"
     page.window.title_bar_hidden = True
     page.window.frameless = True
     page.window.bgcolor = ft.colors.TRANSPARENT
@@ -1663,24 +1635,6 @@ def main(page: ft.Page):
         def on_startup_change(e): toggle_startup(e.control.value)
         def window_drag(e): page.window.start_dragging()
         
-        def toggle_settings_drawer(e=None):
-            if settings_drawer.offset.x > 0: # Mở
-                settings_drawer.visible = True
-                settings_drawer.update()
-                time.sleep(0.02)
-                settings_drawer.offset = ft.Offset(0, 0)
-                blur_overlay.visible = True
-                blur_overlay.opacity = 1
-            else: # Đóng
-                settings_drawer.offset = ft.Offset(1.1, 0)
-                blur_overlay.opacity = 0
-                def hide_overlay():
-                    time.sleep(0.6)
-                    settings_drawer.visible = False
-                    blur_overlay.visible = False
-                    page.update()
-                threading.Thread(target=hide_overlay, daemon=True).start()
-            page.update()
 
         def on_search(e):
             val = search_box.value.lower() if e and e.control else ""
@@ -1774,7 +1728,6 @@ def main(page: ft.Page):
                 core_path = os.path.join(base_dir, "Launcher_Data", "icons", "app_core.py")
                 
                 # 1. Ghi đè code mới
-                import ctypes
                 FILE_ATTRIBUTE_NORMAL = 0x80
                 try: ctypes.windll.kernel32.SetFileAttributesW(core_path, FILE_ATTRIBUTE_NORMAL)
                 except: pass
@@ -1838,7 +1791,6 @@ def main(page: ft.Page):
 
         def check_thread():
             try:
-                import time
                 timestamp = int(time.time())
                 # Link version
                 RAW_URL = f"https://raw.githubusercontent.com/anhkhakl/Conist-Launcher-Update/main/version.json?t={timestamp}"
@@ -1954,7 +1906,6 @@ def main(page: ft.Page):
             def tracking_loop():
                 TARGET_TITLE = f"Conist Link Launcher v{CURRENT_VERSION}"
                 
-                import math 
                 
                 while coord_container.visible:
                     # ... (code bên dưới giữ nguyên)
@@ -2300,11 +2251,7 @@ def main(page: ft.Page):
         progress_overlay.update()
 
         def extract_thread():
-            import zipfile
-            import subprocess
-            import time
-            import ctypes
-            
+
             save_path = APP_CONFIG.get("download_dir")
             slug = clean_name_for_slug(game_name)
             archive_file = os.path.join(save_path, f"{slug}.zip")
@@ -2333,22 +2280,44 @@ def main(page: ft.Page):
                         except: pass 
                     
                     if not is_extracted:
-                        status_txt.value = "WinRAR đang chạy..."
+                        status_txt.value = "Đang giải nén (WinRAR/7Zip)..."
                         status_txt.update()
-                        winrar_exe = r"C:\Program Files\WinRAR\WinRAR.exe"
-                        if not os.path.exists(winrar_exe): winrar_exe = r"C:\Program Files (x86)\WinRAR\WinRAR.exe"
                         
-                        if os.path.exists(winrar_exe):
-                            cmd = [winrar_exe, "x", "-pLinkNeverDie.Com", "-plinkneverdie.com", "-ibck", "-y", archive_file, extract_folder + "\\"]
+                        # [NÂNG CẤP] Tự tìm đường dẫn WinRAR trong Registry
+                        winrar_exe = None
+                        try:
+                            key = reg.OpenKey(reg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\WinRAR.exe")
+                            winrar_exe, _ = reg.QueryValueEx(key, "")
+                            reg.CloseKey(key)
+                        except: pass
+
+                        # Nếu không thấy trong Registry, tìm đường dẫn phổ biến
+                        if not winrar_exe:
+                            possible_paths = [
+                                r"C:\Program Files\WinRAR\WinRAR.exe",
+                                r"C:\Program Files (x86)\WinRAR\WinRAR.exe",
+                                r"D:\Program Files\WinRAR\WinRAR.exe"
+                            ]
+                            for p in possible_paths:
+                                if os.path.exists(p):
+                                    winrar_exe = p
+                                    break
+                        
+                        if winrar_exe and os.path.exists(winrar_exe):
+                            # Thêm switch -o+ để ghi đè nếu file tồn tại
+                            cmd = [winrar_exe, "x", "-pLinkNeverDie.Com", "-plinkneverdie.com", "-ibck", "-y", "-o+", archive_file, extract_folder + "\\"]
                             process = subprocess.Popen(cmd, shell=True)
+                            
+                            # Giả lập thanh loading chạy cho đỡ chán
                             fake_w = 0
                             while process.poll() is None:
-                                if fake_w < 340: fake_w += 5
+                                if fake_w < 350: fake_w += 2
                                 progress_overlay.width = fake_w
                                 progress_overlay.update()
                                 time.sleep(0.1)
                             is_extracted = True
-                        else: raise Exception("Cần cài WinRAR!")
+                        else:
+                            raise Exception("Không tìm thấy WinRAR! Hãy cài WinRAR.")
                     try: os.remove(archive_file)
                     except: pass
                 
@@ -2433,6 +2402,7 @@ def main(page: ft.Page):
 
     # 1. Hai danh sách chứa thẻ (Biến toàn cục để hàm khác gọi được)
     # [QUAN TRỌNG] Phải khai báo 2 biến này trước khi dùng trong downloads_drawer
+    global download_list_col, finished_list_col
     download_list_col = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
     finished_list_col = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
 
@@ -2484,7 +2454,6 @@ def main(page: ft.Page):
         # --- LOGIC CHỨC NĂNG ---
         def delete_game_logic(e):
             e.control.stop_propagation = True
-            import shutil
             show_push_notification(f"Đang xóa {name}...", "warning")
             try:
                 dl_dir = APP_CONFIG.get("download_dir")
@@ -2530,7 +2499,6 @@ def main(page: ft.Page):
 
         def open_location_logic(e):
             e.control.stop_propagation = True
-            import subprocess
             dl_dir = APP_CONFIG.get("download_dir")
             slug = clean_name_for_slug(name)
             target = os.path.join(dl_dir, slug)
@@ -2997,7 +2965,6 @@ def main(page: ft.Page):
         download_list_col.update()
         
         # [FIX 2] Chờ 0.2s để đảm bảo Flet đã vẽ xong thẻ này lên màn hình
-        import time
         time.sleep(0.2)
 
         # [FIX 3] Hàm cập nhật UI an toàn (Chống Crash)
@@ -3028,7 +2995,6 @@ def main(page: ft.Page):
                     try:
                         txt_pct.value = "XÓA BẢN CŨ..."
                         txt_pct.update()
-                        import shutil
                         shutil.rmtree(extract_folder) 
                     except: pass
 
@@ -4309,9 +4275,14 @@ def main(page: ft.Page):
             for res in results:
                 if res: changed = True
         
+        # [NÂNG CẤP] Logic update UI mượt mà hơn
         if changed:
-            print("[FLASH] Đã cập nhật xong cache.")
+            print("[FLASH] Đã cập nhật xong cache ảnh.")
             save_cache()
+            # Chỉ update Grid 1 lần duy nhất sau khi tải xong tất cả
+            try:
+                grid.update() 
+            except: pass
 
 
 
