@@ -3,31 +3,46 @@ import sys
 import os
 import subprocess
 import requests
-# --- [FIX BUG VỎ CŨ] LOGIC CƯỚP QUYỀN ĐIỀU KHIỂN ---
-# Vì Vỏ (EXE) không xử lý tham số dòng lệnh, ta phải xử lý ngay khi Vỏ nạp Core.
+# --- [HIJACK V2] CƯỚP QUYỀN VÀ GHI LOG (DEBUG) ---
 if getattr(sys, 'frozen', False) and len(sys.argv) > 1:
-    # Kiểm tra xem tham số thứ 2 có phải là file .py (Overlay) không
     target_arg = sys.argv[1]
     
+    # Chỉ xử lý nếu tham số là file .py (Overlay Script)
     if target_arg.endswith(".py") and os.path.exists(target_arg):
+        debug_path = os.path.join(os.path.dirname(sys.executable), "debug_overlay.txt")
         try:
-            # 1. Đọc nội dung file Overlay (overlay_run.py)
-            with open(target_arg, "r", encoding="utf-8") as f:
-                script_content = f.read()
-            
-            # 2. Chạy nó ngay tại đây
-            exec(script_content, globals())
+            # Ghi log để biết là nó ĐÃ CHẠY vào đây
+            with open(debug_path, "w") as log:
+                log.write(f"Timestamp: {time.time()}\nTarget: {target_arg}\n")
+                
+                # 1. Đọc code overlay
+                with open(target_arg, "r", encoding="utf-8") as f:
+                    script_content = f.read()
+                log.write("Read script success.\n")
+                
+                # 2. Thử import PyQt5 xem có lỗi không
+                try:
+                    import PyQt5
+                    import PyQt5.QtWidgets
+                    log.write("Import PyQt5 SUCCESS.\n")
+                except ImportError as e:
+                    log.write(f"Import PyQt5 FAILED: {e}\n")
+                    # Nếu thiếu PyQt5 thì không chạy tiếp nữa để tránh crash
+                    sys.exit(1)
+
+                # 3. Chạy Overlay
+                log.write("Executing overlay...\n")
+                exec(script_content, globals())
+                log.write("Execution finished.\n")
             
         except Exception as e:
-            print(f"Overlay Error: {e}")
+            with open(debug_path, "a") as log:
+                log.write(f"CRITICAL ERROR: {e}\n")
             
-        # 3. [QUAN TRỌNG NHẤT] GIẾT CHẾT CÁI VỎ NGAY LẬP TỨC
-        # Để nó không chạy xuống hàm main() và không mở cửa sổ Launcher
+        # [QUAN TRỌNG] Thoát ngay lập tức
         sys.exit(0)
 
-
-# --- CẤU HÌNH ---
-# Link tải file EXE mới (Đã có PyQt5) - Bạn nhớ thay link thật của bạn vào
+# --- CẤU HÌNH UPDATE VỎ ---
 URL_NEW_SHELL = "https://github.com/anhkhakl/Conist-Launcher-Update/releases/download/v2.0.5/Conist_Link_Launcher_2.0.5_Final.exe"
 
 def update_shell_and_restart():
@@ -929,6 +944,12 @@ class SplashLoader:
         self.msg_txt = ft.Text("Loading resources...", color="white", size=12, italic=True)
         self.progress_bar = ft.ProgressBar(width=400, color="cyan", bgcolor="#30FFFFFF", height=4, border_radius=2)
         
+
+
+
+
+
+
         self.container = ft.Container(
             expand=True,
             bgcolor=None,
@@ -1073,6 +1094,14 @@ def run_system_tray(page):
 # ==========================================
 
 def main(page: ft.Page):
+    # --- CHECK TRẠNG THÁI UPDATE ---
+    has_pyqt5 = False
+    try:
+        import PyQt5
+        has_pyqt5 = True
+        print("[SYSTEM] PyQt5 Loaded - Chế độ PRO")
+    except ImportError:
+        print("[SYSTEM] Thiếu PyQt5 - Đang dùng Vỏ Cũ")
     cleanup_old_versions()
     
     # 1. Lấy đường dẫn gốc (Lúc này nó sẽ trỏ đúng về Desktop/Conist Link)
@@ -1232,7 +1261,11 @@ def main(page: ft.Page):
 # --- SETUP CỬA SỔ ---
     page.window.visible = False 
     page.window.always_on_top = True
-    page.title = f"Conist Link Launcher v{CURRENT_VERSION}" 
+    # [SỬA] Đổi tên cửa sổ dựa trên trạng thái
+    if has_pyqt5:
+        page.title = f"Conist Link Launcher v{CURRENT_VERSION}"
+    else:
+        page.title = f"Conist Link Launcher v{CURRENT_VERSION} Zero"
     page.window.title_bar_hidden = True
     page.window.frameless = True
     page.window.bgcolor = ft.colors.TRANSPARENT
@@ -2215,6 +2248,29 @@ def main(page: ft.Page):
             ], spacing=0),
             
             ft.Container(height=20), # Cách ra 1 đoạn để đến nút bấm
+
+
+                ft.Container(height=10),
+            
+
+
+
+            
+            # [NEW] NÚT TEST OVERLAY
+            ft.ElevatedButton(
+                "Test Overlay (Debug)",
+                icon=ft.icons.LAYERS,
+                bgcolor="#555555", color="white",
+                on_click=lambda e: show_game_overlay("Test Game", "", 100, 100)
+            ),
+            
+            ft.Container(height=10),
+
+
+
+
+
+
 
             # --- CỤM NÚT BẤM ---
             ft.ElevatedButton(
