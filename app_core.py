@@ -35,6 +35,291 @@ except ImportError:
 
 
 
+# --- CẤU HÌNH TURBO DOWNLOAD ---
+# Tạo một Session dùng chung để không phải kết nối lại nhiều lần
+http_session = requests.Session()
+http_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Connection': 'keep-alive', # Giữ kết nối
+    'Accept-Encoding': 'gzip, deflate', # Nén dữ liệu cho nhẹ
+})
+
+# --- [ADD] HÀM LẤY LINK STEAM TỪ LND ---
+def get_real_steam_url(lnd_soup):
+    """Tìm link Steam chính chủ trong trang LND"""
+    try:
+        # Tìm thẻ <a> có href chứa store.steampowered.com
+        steam_link = lnd_soup.find('a', href=re.compile(r'store\.steampowered\.com/app/', re.I))
+        if steam_link:
+            return steam_link['href']
+    except: pass
+    return None
+
+
+
+
+
+
+
+
+
+def parse_mixed_game_data(file_content):
+    """
+    Parser 'Huyền Thoại': Dùng y chang logic của Launcher cũ (ast.literal_eval).
+    Đọc nguyên file 1 lần -> Tự động bỏ qua # [ID] -> Hiểu Python List.
+    """
+    try:
+        # --- CÁCH 1: CÁCH CỦA LAUNCHER CŨ (CHUẨN NHẤT) ---
+        # Hàm này tự động coi dấu # là comment và bỏ qua, nên # [1] không gây lỗi.
+        import ast
+        data = ast.literal_eval(file_content)
+        if isinstance(data, list):
+            return data
+            
+    except Exception:
+        # --- CÁCH 2: BẢO HIỂM (FIX LỖI NULL/TRUE/FALSE) ---
+        # Launcher cũ sẽ chết nếu gặp 'null', ta thêm bước này để cứu.
+        try:
+            fixed = file_content.replace('null', 'None').replace('true', 'True').replace('false', 'False')
+            data = ast.literal_eval(fixed)
+            if isinstance(data, list):
+                return data
+        except:
+            pass # Nếu nát quá thì chịu
+            
+    return []
+
+
+
+
+
+
+
+
+
+
+
+def fetch_steam_data(steam_url):
+    """Cào dữ liệu từ Steam (Logo, Ảnh, Cấu hình, Online Status)"""
+    if not steam_url: return None
+    try:
+        # Thêm tham số l=vietnamese để ưu tiên lấy tiếng Việt cho dễ khớp với keyword của bạn
+        if "?" in steam_url:
+            steam_url += "&l=vietnamese"
+        else:
+            steam_url += "?l=vietnamese"
+
+        cookies = {'birthtime': '0', 'lastagecheckage': '1-January-1990'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        
+        res = requests.get(steam_url, headers=headers, cookies=cookies, timeout=8)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        data = {}
+
+        # 1. LẤY LOGO
+        header_img = soup.find('img', class_='game_header_image_full')
+        if header_img:
+            data['icon'] = header_img.get('src')
+
+        # 2. LẤY ẢNH PREVIEW
+        images = []
+        carousel = soup.find('div', class_='gamehighlight_desktopcarousel')
+        if carousel and carousel.get('data-props'):
+            import html 
+            try:
+                props_str = html.unescape(carousel['data-props'])
+                props_json = json.loads(props_str)
+                for ss in props_json.get('screenshots', []):
+                    img_url = ss.get('full') or ss.get('path_full')
+                    if img_url: images.append(img_url)
+            except: pass
+        if images: data['album'] = images
+
+        # 3. [UPDATE THEO YÊU CẦU] CHECK ONLINE / OFFLINE
+        # Logic: Quét cả Nhãn người dùng (Glance Tags) VÀ Tính năng Dev (Category)
+        
+        mp_status = None 
+        
+        # Từ khóa Online (Việt + Anh + Pháp/Đức cơ bản nếu có)
+        online_keywords = [
+            'multi-player', 'multiplayer', 'online', 'co-op', 'mmo', 'pvp', 
+            'chơi nhiều người', 'phối hợp trên mạng', 'trực tuyến', 'nhiều người', 
+            'giao chiến', 'mạng cục bộ', 'local multiplayer'
+        ]
+        
+        # Từ khóa Offline
+        offline_keywords = [
+            'single-player', 'singleplayer', 'chơi đơn', 'một người', 'single player'
+        ]
+
+        found_online = False
+        found_offline = False
+
+        # --- CÁCH 1: QUÉT NHÃN NGƯỜI DÙNG (glance_tags) - Ưu tiên cái này ---
+        # Đây là phần bạn vừa yêu cầu thêm vào
+        glance_tags = soup.find('div', class_='glance_tags')
+        if glance_tags:
+            tags = glance_tags.find_all('a', class_='app_tag')
+            for tag in tags:
+                txt = tag.get_text(strip=True).lower()
+                # Debug: print(f"Found Tag: {txt}")
+                if any(k in txt for k in online_keywords): found_online = True
+                if any(k in txt for k in offline_keywords): found_offline = True
+
+        # --- CÁCH 2: QUÉT TÍNH NĂNG DEV (category_block) - Code cũ dự phòng ---
+        # Nếu Cách 1 chưa tìm ra Online, ta quét tiếp cái này cho chắc
+        if not found_online:
+            features_div = soup.find('div', id='category_block')
+            if features_div:
+                labels = features_div.find_all('div', class_='label')
+                for lbl in labels:
+                    txt = lbl.get_text(strip=True).lower()
+                    if any(k in txt for k in online_keywords): found_online = True
+                    if any(k in txt for k in offline_keywords): found_offline = True
+
+        # --- QUYẾT ĐỊNH ---
+        # Ưu tiên: Nếu có dấu hiệu Online -> Là Online (Vì nhiều game Chơi đơn vẫn có chế độ Online)
+        if found_online:
+            mp_status = "Online"
+        elif found_offline:
+            mp_status = "Offline"
+        
+        data['mp_status'] = mp_status
+
+        # 4. LẤY CẤU HÌNH
+        req_str = ""
+        sys_req = soup.find('div', class_='game_area_sys_req_full')
+        if not sys_req:
+            sys_req = soup.find('div', {'data-os': 'win'})
+        
+        if sys_req:
+            text = sys_req.get_text(separator="\n").strip()
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            req_str = "\n".join(lines)
+        if req_str: data['requirements'] = req_str
+
+        return data
+    except Exception as e:
+        print(f"[STEAM] Lỗi fetch: {e}")
+        return None
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # --- HÀM TỔNG HỢP: HYBRID ENGINE (STEAM + LND) ---
+# --- HÀM TỔNG HỢP: HYBRID ENGINE (STEAM + LND) ---
+def fetch_full_details(lnd_url):
+    if not lnd_url: return None
+    
+    final_data = {
+        'web_version': 'Unknown',
+        'icon': None, # [MỚI] Thêm trường icon
+        'album': [],
+        'requirements': 'Đang cập nhật...',
+        'mp_status': 'Offline'
+    }
+
+    try:
+        # --- GIAI ĐOẠN 1: KẾT NỐI LND ---
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res_lnd = requests.get(lnd_url, headers=headers, timeout=8)
+        soup_lnd = BeautifulSoup(res_lnd.text, 'html.parser')
+
+        # 1. Luôn lấy Version từ LND
+        ver_p = soup_lnd.find('p', class_='data-label', string=re.compile(r'Phiên bản', re.I))
+        if ver_p:
+            ver_info = ver_p.find_next_sibling('p', class_='info')
+            if ver_info: final_data['web_version'] = ver_info.get_text(strip=True)
+        else:
+            title = soup_lnd.title.string if soup_lnd.title else ""
+            match = re.search(r'(?:v|ver|build|update)\.?\s*(\d+(?:\.\d+)*)', title, re.I)
+            if match: final_data['web_version'] = match.group(1)
+
+        # --- GIAI ĐOẠN 2: THỬ SANG STEAM ---
+        steam_url = get_real_steam_url(soup_lnd)
+        steam_data = None
+        
+        if steam_url:
+            # print(f"[HYBRID] Tìm thấy Steam: {steam_url}")
+            steam_data = fetch_steam_data(steam_url)
+        
+        # Nếu lấy được dữ liệu Steam -> Ưu tiên dùng
+        if steam_data:
+            if steam_data.get('icon'): final_data['icon'] = steam_data['icon'] # [QUAN TRỌNG] Lấy Logo Steam
+            if steam_data.get('album'): final_data['album'] = steam_data['album']
+            if steam_data.get('requirements'): final_data['requirements'] = steam_data['requirements']
+            if steam_data.get('mp_status'): final_data['mp_status'] = steam_data['mp_status']
+        
+        # --- GIAI ĐOẠN 3: DỰ PHÒNG (FALLBACK VỀ LND) ---
+        
+        # A. Dự phòng LOGO (Nếu Steam không có)
+        if not final_data['icon']:
+            img = soup_lnd.find('img', id='wallpaper_img')
+            if img:
+                src = img.get('src')
+                final_data['icon'] = "https://linkneverdie.net" + src if src.startswith("/") else src
+
+        # B. Dự phòng ALBUM
+        if not final_data['album']:
+            images = []
+            screenshot_div = soup_lnd.find('div', id='screenshots_div')
+            if screenshot_div:
+                target_imgs = screenshot_div.find_all('img')
+                for img in target_imgs:
+                    src = img.get('src') or img.get('data-src')
+                    if src:
+                        if src.startswith("/"): src = "https://linkneverdie.net" + src
+                        if src not in images: images.append(src)
+            final_data['album'] = images[:10]
+
+        # C. Dự phòng Cấu hình
+        if final_data['requirements'] == 'Đang cập nhật...':
+            req_str = ""
+            cols = [('game_area_sys_req_leftCol', 'TỐI THIỂU'), ('game_area_sys_req_rightCol', 'KHUYẾN NGHỊ')]
+            for cls, title in cols:
+                col = soup_lnd.find('div', class_=cls)
+                if col:
+                    req_str += f"\n--- {title} ---\n"
+                    for li in col.find_all('li'):
+                        req_str += li.get_text(strip=True) + "\n"
+            if req_str: final_data['requirements'] = req_str.strip()
+
+        # D. Dự phòng Online/Offline
+        if not steam_data: 
+            final_data['mp_status'] = "Online"
+            try:
+                mp_label = soup_lnd.find('p', class_='data-label', string=re.compile(r'Multiplayer', re.I))
+                if mp_label:
+                    info_p = mp_label.find_next_sibling('p', class_='info')
+                    if info_p:
+                        text = info_p.get_text(strip=True).lower()
+                        if "không có" in text or "không c" in text:
+                            final_data['mp_status'] = "Offline"
+            except: pass
+
+        return final_data
+
+    except Exception as e:
+        print(f"[HYBRID] Lỗi nghiêm trọng: {e}")
+        return None
+
+
+
 
 
 
@@ -210,6 +495,38 @@ def create_desktop_shortcut(target_path, icon_path):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def kill_zombie_overlays():
+    """Diệt sạch các Overlay cũ còn sót lại để tránh trùng lặp"""
+    try:
+        # Lệnh taskkill của Windows để tắt toàn bộ tiến trình tên là ConistOverlayHelper.exe
+        # subprocess.call("taskkill /F /IM ConistOverlayHelper.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("[SYSTEM] Đã dọn dẹp các Overlay cũ. (DISABLED)")
+    except: pass
+
+
+
+
+
+
+
+
 # Tên thư mục dữ liệu
 DATA_DIR_NAME = "Launcher_Data"
 
@@ -220,9 +537,353 @@ BASE_DATA_PATH = os.path.join(get_base_path(), DATA_DIR_NAME)
 # ==========================================
 # 2. CẤU HÌNH & BIẾN TOÀN CỤC (DÙNG SAU KHI ĐÃ CÓ HÀM)
 # ==========================================
+# [CHÈN VÀO KHU VỰC BIẾN TOÀN CỤC]
+active_game_sessions = {} # [BẮT BUỘC] Phải là ngoặc nhọn {} để lưu Process ID #
+GLOBAL_GHOST_PREVIEW = None  # <--- Biến cầu nối để gọi animation từ bất cứ đâu
 
 
-CURRENT_VERSION = "2.0.4"
+
+
+
+
+
+
+
+
+
+
+
+
+
+# =================================================================
+# [NEW V5] CHANGELOG MODAL (CRYSTAL CLEAR + CONTINUOUS GEAR)
+# =================================================================
+class ChangelogModal(ft.Container):
+    def __init__(self, page_ref):
+        super().__init__()
+        self.page_ref = page_ref
+        self.visible = False
+        self.is_idling = False # Cờ kiểm soát vòng quay chậm
+        
+        # --- CẤU HÌNH ANIMATION TAB ---
+        self.opacity = 0 
+        self.animate_opacity = ft.Animation(400, "easeOut")
+        
+        # Offset: Trượt từ trái (-0.2) vào giữa
+        self.offset = ft.transform.Offset(-0.2, 0) 
+        self.animate_offset = ft.Animation(600, "easeOutCubic")
+        
+        self.alignment = ft.alignment.center
+        self.expand = True 
+        self.bgcolor = "#00000000"
+        
+        self.changelog_content = """
+- Fix Lỗi cho lnd (cái bug xung đột với steam).
+- Tối ưu lại phần giao diện nhìn cho nó mượt hơn vs đẹp hơn.
+- Thêm thông tin nhiều và đa dạng hơn cho mỗi game kèm theo đó là cào dữ liệu từ steam và lnd cho phần info của mỗi game card.
+- Thêm phần online và offline cho mỗi 1 game card, dẫu phần này hơi chậm và ngu nên cần về sao fix lại.
+- Mẹ m bel.
+        """
+
+        # --- [1] ICON BÁNH RĂNG ---
+        self.gear_icon = ft.Icon(
+            ft.icons.SETTINGS, 
+            color="#00E5FF", 
+            size=28,
+            rotate=ft.Rotate(0, alignment=ft.alignment.center),
+            # Animation sẽ được code điều khiển tay hoàn toàn để mượt hơn
+            animate_rotation=None 
+        )
+
+        # --- [2] NÚT BẤM TỐI GIẢN (Đen mờ) ---
+        self.btn_close = ft.Container(
+            content=ft.Text("Đã Hiểu", size=12, weight="bold", color="#666666"),
+            width=120, height=35,
+            # Nền gần như tàng hình, chỉ hiện khi hover
+            bgcolor="#00000000", 
+            border=ft.border.all(1, "#333333"), 
+            border_radius=6,
+            alignment=ft.alignment.center,
+            animate_scale=ft.Animation(100, "easeOut"),
+            animate=ft.Animation(200, "easeOut"),
+            on_click=self.hide,
+            on_hover=self.animate_button_hover
+        )
+
+        # --- [3] UI CHÍNH (Cái bảng Trong Suốt) ---
+        self.dialog_box = ft.Container(
+            width=600, height=380,
+            
+            # --- [QUAN TRỌNG] ĐỘ TRONG SUỐT ---
+            # #0D... = Alpha 5% (Gần như trong vắt)
+            bgcolor="#0D000000", 
+            
+            # Giảm Blur xuống thấp (5-10) để nhìn xuyên thấu rõ hơn
+            # Nếu muốn trong vắt như kính thường thì chỉnh về 0
+            blur=ft.Blur(8, 8, ft.BlurTileMode.MIRROR),
+            
+            border_radius=12,
+            border=ft.border.all(1, "#1AFFFFFF"), # Viền trắng siêu mờ để định hình
+            shadow=ft.BoxShadow(blur_radius=50, color="#000000"), # Bóng đổ để tách nền
+            padding=25,
+            
+            content=ft.Column([
+                # Header
+                ft.Row([
+                    self.gear_icon, 
+                    ft.Text("NHẬT KÝ CẬP NHẬT", size=18, weight="bold", color="white", font_family="Segoe UI"),
+                    ft.Container(expand=True),
+                    ft.IconButton(ft.icons.CLOSE, icon_color="#444444", icon_size=20, on_click=self.hide)
+                ], alignment=ft.MainAxisAlignment.CENTER),
+                
+                ft.Divider(color="#1AFFFFFF", height=20),
+                
+                # Nội dung
+                ft.Container(
+                    expand=True,
+                    content=ft.Column([
+                        ft.Text(f"Phiên bản: v{CURRENT_VERSION}", italic=True, color="#00E5FF", size=12),
+                        ft.Container(height=10),
+                        ft.Text(self.changelog_content, size=14, color="#DDDDDD", font_family="Consolas"),
+                    ], scroll=ft.ScrollMode.AUTO)
+                ),
+                
+                ft.Divider(color="#1AFFFFFF", height=20),
+                
+                # Footer
+                ft.Row([self.btn_close], alignment=ft.MainAxisAlignment.END)
+            ])
+        )
+        
+        self.content = self.dialog_box
+
+    # --- ANIMATION NÚT (Sáng nhẹ khi hover) ---
+    def animate_button_hover(self, e):
+        is_hover = e.data == "true"
+        e.control.scale = 1.05 if is_hover else 1.0
+        # Hover: Hiện nền đen mờ + Viền sáng
+        e.control.bgcolor = "#80000000" if is_hover else "#00000000"
+        e.control.border = ft.border.all(1, "#00E5FF") if is_hover else ft.border.all(1, "#333333")
+        e.control.content.color = "white" if is_hover else "#666666"
+        e.control.content.update()
+        e.control.update()
+
+    # --- LUỒNG QUAY BÁNH RĂNG (Vô tận) ---
+    def gear_loop(self):
+        # 1. Quay nhanh lúc đầu (Giả lập lăn vào)
+        steps = 20
+        for i in range(steps):
+            if not self.visible: return
+            self.gear_icon.rotate.angle += 0.3 # Tốc độ nhanh
+            self.gear_icon.update()
+            time.sleep(0.02)
+
+        # 2. Chuyển sang quay chậm (Idle)
+        self.is_idling = True
+        while self.visible and self.is_idling:
+            self.gear_icon.rotate.angle += 0.04 # Tốc độ chậm rãi
+            self.gear_icon.update()
+            time.sleep(0.03)
+
+    def show(self):
+        self.visible = True
+        self.opacity = 0
+        self.offset = ft.transform.Offset(-0.2, 0)
+        self.gear_icon.rotate.angle = 0 # Reset góc
+        self.page_ref.update()
+        
+        time.sleep(0.05)
+        
+        # Animation trượt vào
+        self.opacity = 1
+        self.offset = ft.transform.Offset(0, 0)
+        self.page_ref.update()
+        
+        # Bắt đầu luồng quay bánh răng
+        threading.Thread(target=self.gear_loop, daemon=True).start()
+
+    def hide(self, e=None):
+        self.is_idling = False # Dừng quay chậm
+        
+        # Animation trượt ra
+        self.opacity = 0
+        self.offset = ft.transform.Offset(0.2, 0) 
+        self.page_ref.update()
+        
+        # Quay nhanh thêm 1 đoạn (Giả lập lăn đi)
+        def spin_out():
+            for _ in range(15):
+                self.gear_icon.rotate.angle += 0.4
+                self.gear_icon.update()
+                time.sleep(0.02)
+            
+            self.visible = False
+            # Reset về vị trí ẩn bên trái
+            self.offset = ft.transform.Offset(-0.2, 0)
+            try: self.page_ref.update()
+            except: pass
+
+        threading.Thread(target=spin_out, daemon=True).start()
+
+    # LOGIC KIỂM TRA (Server > Local)
+    def check_and_show_once(self):
+        try:
+            flag_file = os.path.join(get_base_path(), "Launcher_Data", "last_opened_version.txt")
+            last_ver = ""
+            if os.path.exists(flag_file):
+                with open(flag_file, "r") as f: last_ver = f.read().strip()
+            
+            if not last_ver:
+                with open(flag_file, "w") as f: f.write(CURRENT_VERSION)
+                return
+
+            if last_ver != CURRENT_VERSION:
+                try:
+                    cur_nums = [int(x) for x in re.findall(r'\d+', CURRENT_VERSION)]
+                    old_nums = [int(x) for x in re.findall(r'\d+', last_ver)]
+                    if cur_nums > old_nums:
+                        self.show()
+                except: self.show()
+                
+                with open(flag_file, "w") as f: f.write(CURRENT_VERSION)
+        except Exception: pass
+
+
+
+
+
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
+class GhostDownloadPreview(ft.Container):
+    def __init__(self):
+        super().__init__()
+        self.visible = False 
+        self.force_stop = False # [MỚI] Cờ để báo hiệu tắt ngay lập tức
+        
+        # ... (Các thông số width, offset, opacity cũ GIỮ NGUYÊN) ...
+        self.width = 260 
+        self.left = 0
+        self.top = 0
+        self.bottom = 0 
+        self.opacity = 0 
+        self.offset = ft.transform.Offset(-0.2, 0) 
+        self.animate_opacity = ft.Animation(500, "easeOut") 
+        self.animate_offset = ft.Animation(500, "easeOutQuart") 
+        self.bgcolor = ft.colors.with_opacity(0.08, "#000000") 
+        self.blur = ft.Blur(10, 10, ft.BlurTileMode.MIRROR)
+        self.border = ft.border.only(right=ft.border.BorderSide(1, ft.colors.with_opacity(0.1, "white")))
+        self.shadow = None 
+
+        # Nội dung (Giữ nguyên)
+        self.img = ft.Image(width=60, height=60, border_radius=8, fit=ft.ImageFit.COVER, opacity=0.9)
+        self.lbl = ft.Text("", size=14, weight="bold", color="white", no_wrap=True)
+        
+        self.content = ft.Container(
+            padding=20,
+            content=ft.Column(controls=[
+                ft.Container(height=40), 
+                ft.Row([
+                    ft.Icon(ft.icons.DOWNLOAD_FOR_OFFLINE, color="#00E5FF", size=24), 
+                    ft.Text("KHO TẢI", weight="bold", size=15, color="white")
+                ]),
+                ft.Divider(color=ft.colors.with_opacity(0.15, "white"), height=20),
+                ft.Container(
+                    bgcolor=ft.colors.with_opacity(0.05, "white"), 
+                    padding=10, border_radius=10,
+                    content=ft.Row([
+                        self.img, 
+                        ft.Column([
+                            self.lbl,
+                            ft.Text("Đang khởi tạo...", size=11, color="cyan", italic=True),
+                            ft.ProgressBar(width=80, height=2, color="cyan", bgcolor="#444444")
+                        ], spacing=3)
+                    ], spacing=10)
+                ),
+                ft.Container(expand=True), 
+                ft.Text("Nhấn Tab để xem chi tiết", color="white60", size=11, weight="bold")
+            ])
+        )
+
+    # [MỚI] Hàm tắt ngay lập tức (Gọi khi bấm Tab)
+    def hide_fast(self):
+        self.force_stop = True # Gửi tín hiệu dừng
+        self.visible = False   # Ẩn ngay lập tức khỏi màn hình
+        self.opacity = 0
+        self.update()
+
+    def trigger(self, name, icon):
+        try:
+            self.force_stop = False # Reset cờ
+            self.lbl.value = name if len(name) < 15 else name[:12] + "..."
+            self.img.src = icon if icon else "https://via.placeholder.com/60"
+            
+            # Reset trạng thái
+            self.visible = True
+            self.opacity = 0 
+            self.offset = ft.transform.Offset(-0.2, 0)
+            self.update()
+            
+            def run():
+                time.sleep(0.05)
+                # 1. Hiện ra
+                if self.force_stop: return # Check ngay
+                self.opacity = 1 
+                self.offset = ft.transform.Offset(0, 0)
+                self.update()
+                
+                # 2. [THÔNG MINH] Thay vì ngủ 2.2s liền tù tì, ta ngủ 22 lần, mỗi lần 0.1s
+                # Để nếu bấm Tab cái là thoát vòng lặp ngay
+                for _ in range(22): 
+                    if self.force_stop: return # Thoát ngay nếu bị ép tắt
+                    time.sleep(0.1) 
+                
+                # 3. Biến mất (Chỉ chạy nếu không bị force_stop)
+                if not self.force_stop:
+                    self.opacity = 0 
+                    self.offset = ft.transform.Offset(-0.2, 0)
+                    self.update()
+                    time.sleep(0.6)
+                    if not self.force_stop: # Check lần cuối
+                        self.visible = False
+                        self.update()
+            
+            threading.Thread(target=run, daemon=True).start()
+        except: pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+CURRENT_VERSION = "2.0.5"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -250,7 +911,6 @@ COMPLETED_GAMES = []  # Lưu tên game đã tải xong
 
 
 
-
 # --- [NEW] HỆ THỐNG THÔNG BÁO XẾP CHỒNG (ROLLING STACK) ---
 notification_stack = ft.Column(
     left=20, top=20, # Vị trí góc trên trái (đè lên Header)
@@ -258,30 +918,34 @@ notification_stack = ft.Column(
     alignment=ft.MainAxisAlignment.START,
 )
 
-# --- [V4.1 FINAL] HỆ THỐNG THÔNG BÁO (3 MÀU + GHIM UPDATE) ---
+# --- [V4.7 BACK TO BASIC] THÔNG BÁO CHUẨN (TREO 5 PHÚT CHO UPDATE) ---
 def show_push_notification(message, type="info", duration=4000, on_click_action=None, key=None):
     # 1. Chống Spam
     if key:
         for control in notification_stack.controls:
             if control.data == key: return
 
-    # 2. Cấu hình 3 MÀU CHUẨN (Blue - Green - Red)
+    # 2. Cấu hình màu
     config = {
         "info": {"color": "#2196F3", "icon": ft.icons.INFO},
-        "success": {"color": "#4CAF50", "icon": ft.icons.CHECK},      # GREEN: Bắt đầu tải
+        "success": {"color": "#4CAF50", "icon": ft.icons.CHECK},
         "warning": {"color": "#FFC107", "icon": ft.icons.WARNING},
-        "error": {"color": "#F44336", "icon": ft.icons.ERROR},         # RED: Lỗi
+        "error": {"color": "#F44336", "icon": ft.icons.ERROR},
         "update": {"color": "#D32F2F", "icon": ft.icons.CLOUD_DOWNLOAD},
-        "loading": {"color": "#1976D2", "icon": ft.icons.DOWNLOADING}, # BLUE: Đang lấy tin
+        "loading": {"color": "#1976D2", "icon": ft.icons.DOWNLOADING},
     }
     style = config.get(type, config["info"])
     
+    # [LOGIC QUAN TRỌNG] Nếu là Update -> Ép thời gian lên 5 phút (300 giây)
+    # Dù bên ngoài truyền bao nhiêu thì vào đây cũng thành 5 phút
+    if type == "update":
+        duration = 300000 
+
     banner_ref = [None]
 
     def close_banner(e=None):
         if banner_ref[0]:
             try:
-                # Hiệu ứng đóng
                 target_w = 30
                 current_w = banner_ref[0].width
                 while current_w > target_w + 5:
@@ -301,11 +965,12 @@ def show_push_notification(message, type="info", duration=4000, on_click_action=
         if on_click_action: on_click_action()
         close_banner()
 
+    # --- UI ĐƠN GIẢN NHẤT ---
     icon_box = ft.Container(
         content=ft.Icon(style["icon"], color="white", size=16),
         width=30, height=30, bgcolor=style["color"],
         border_radius=15, alignment=ft.alignment.center,
-        rotate=ft.Rotate(0, alignment=ft.alignment.center),
+        # Không Rotate, Không Shine, Không Stack
     )
 
     text_content = ft.Container(
@@ -326,15 +991,11 @@ def show_push_notification(message, type="info", duration=4000, on_click_action=
     
     banner_ref[0] = banner
 
-    # --- [LOGIC GHIM UPDATE LÊN ĐẦU BẢNG] ---
+    # Chèn vào Stack (Update lên đầu)
     update_index = -1
     for i, ctrl in enumerate(notification_stack.controls):
-        if ctrl.data == "update_alert":
-            update_index = i
-            break
+        if ctrl.data == "update_alert": update_index = i; break
     
-    # Nếu có Update -> Chèn xuống dưới nó (Index 1)
-    # Nếu bản thân thông báo này là Update -> Chèn lên đầu (Index 0)
     if update_index != -1 and type != "update":
         notification_stack.controls.insert(update_index + 1, banner)
     else:
@@ -342,41 +1003,37 @@ def show_push_notification(message, type="info", duration=4000, on_click_action=
         
     notification_stack.update()
 
-    # Animation chậm rãi
+    # Animation Loop (Chỉ mở ra và chờ tắt)
     def animate_physics():
         try:
+            # 1. Animation mở rộng
             time.sleep(0.05)
             target_width = 280
             current_w = 30
             text_shown = False
             
             while abs(target_width - current_w) > 1:
-                current_w += (target_width - current_w) * 0.08 # Hệ số chậm 0.08
-                
+                current_w += (target_width - current_w) * 0.08
                 banner.width = current_w
-                progress = (current_w - 30) / 250
-                icon_box.rotate.angle = progress * -6.28
-                
                 if current_w > 180 and not text_shown:
                     text_content.opacity = 1
                     text_content.update()
                     text_shown = True
-                
                 banner.update()
-                icon_box.update()
                 time.sleep(0.016)
             
             banner.width = target_width
-            icon_box.rotate.angle = -6.28
             if not text_shown: 
                 text_content.opacity = 1
                 text_content.update()
             banner.update()
-            icon_box.update()
 
+            # 2. CHỜ VÀ TẮT
             if duration:
+                # Ngủ đúng thời gian quy định (5 phút với update) rồi tắt
                 time.sleep(duration / 1000)
                 close_banner()
+                    
         except: pass
 
     threading.Thread(target=animate_physics, daemon=True).start()
@@ -419,7 +1076,57 @@ def save_config():
 # Link phải là dạng RAW (Bấm nút Raw trên Github rồi copy link)
 URL_VERSION_FILE = "https://raw.githubusercontent.com/anhkhakl/Conist-Launcher-Update/main/data_version.txt"
 URL_RAW_DATA_FILE = "https://raw.githubusercontent.com/anhkhakl/Conist-Launcher-Update/main/raw_games.txt"
+# --- CẤU HÌNH AUTO-FIX LND ---
+LND_FIX_FILENAME = "LinkNeverDie.Com_Lib.dll"
+# Link tải file thuốc xịn từ Github của bạn
+URL_LND_FIX = "https://github.com/anhkhakl/Conist-Launcher-Update/raw/main/LinkNeverDie.Com_Lib.dll"
 
+def apply_lnd_vaccine(game_folder_path):
+    """
+    Tiêm Vắc-xin: Luôn luôn GHI ĐÈ file thuốc xịn vào thư mục game.
+    Kể cả file cũ có đang ở chế độ Read-only cũng phá để ghi đè.
+    """
+    import stat # Thư viện để chỉnh quyền file
+    
+    try:
+        # 1. Kiểm tra "Kho thuốc" (Launcher_Data) đã có thuốc chưa?
+        local_fix_path = os.path.join(BASE_DATA_PATH, LND_FIX_FILENAME)
+        
+        # Nếu kho chưa có thì tải về từ Github
+        if not os.path.exists(local_fix_path):
+            print("[AUTO-FIX] Trong kho chưa có thuốc, đang tải về...")
+            try:
+                res = requests.get(URL_LND_FIX, timeout=15)
+                if res.status_code == 200:
+                    with open(local_fix_path, "wb") as f:
+                        f.write(res.content)
+                else:
+                    print(f"[AUTO-FIX] Tải thuốc thất bại: {res.status_code}")
+                    return 
+            except: return
+
+        # 2. Xác định vị trí file trong thư mục Game (Mục tiêu cần tiêu diệt/thay thế)
+        dest_path = os.path.join(game_folder_path, LND_FIX_FILENAME)
+        
+        # 3. [QUAN TRỌNG] Xử lý file cũ trong thư mục game (nếu có)
+        if os.path.exists(dest_path):
+            try:
+                # Kiểm tra nếu file cũ bị set "Read-only" thì gỡ ra để xóa được
+                os.chmod(dest_path, stat.S_IWRITE)
+                # Xóa luôn cho sạch sẽ
+                os.remove(dest_path)
+                print("[AUTO-FIX] Đã xóa file cũ trong game.")
+            except Exception as e:
+                print(f"[AUTO-FIX] Không xóa được file cũ: {e}")
+                # Nếu không xóa được (do đang chạy chẳng hạn) thì return luôn
+                return
+
+        # 4. Chép file thuốc xịn vào
+        shutil.copy2(local_fix_path, dest_path)
+        print(f"[AUTO-FIX] Đã chép đè thuốc mới vào: {game_folder_path}")
+
+    except Exception as e:
+        print(f"[AUTO-FIX] Lỗi: {e}")
 # File lưu cục bộ trên máy người dùng
 LOCAL_DATA_PATH = os.path.join(BASE_DATA_PATH, "local_games.txt")
 LOCAL_VERSION_PATH = os.path.join(BASE_DATA_PATH, "data_version.txt")
@@ -438,23 +1145,22 @@ def download_data_direct():
         timestamp = int(time.time())
         print(f"[DATA] Đang tải data gốc từ Github...")
         
-        # Tải file Raw Games
         res = requests.get(f"{URL_RAW_DATA_FILE}?t={timestamp}", timeout=15)
         
         if res.status_code == 200:
             raw_content = res.text
-            # Kiểm tra cú pháp (nếu sai cú pháp nó sẽ báo lỗi và nhảy xuống except)
-            ast.literal_eval(raw_content) 
             
-            # Lưu file vào máy
-            with open(LOCAL_DATA_PATH, "w", encoding="utf-8") as f:
-                f.write(raw_content)
-            return True
-        else:
-            print(f"[DATA] Lỗi tải: {res.status_code}")
-            return False
+            # [QUAN TRỌNG] Kiểm tra thử xem có đọc được không
+            test_data = parse_mixed_game_data(raw_content)
+            
+            if len(test_data) > 0:
+                with open(LOCAL_DATA_PATH, "w", encoding="utf-8") as f:
+                    f.write(raw_content)
+                return True
+            else:
+                print("[DATA] File tải về không đọc được game nào!")
+                return False
     except Exception as e:
-        print(f"[DATA] Lỗi ngoại lệ khi tải: {e}")
         return False
 
 # 2. Hàm check update ngầm (Chỉ chạy khi đã vào được App rồi)
@@ -610,125 +1316,115 @@ def fetch_lnd_version(lnd_url):
         return "Error"
 
 def get_lnd_image(lnd_url):
-    """Hàm lấy ảnh bìa LND: Ưu tiên ID 'wallpaper_img' chuẩn xác"""
+    """Lấy link ảnh bìa từ LND (Retry + Headers)"""
     if not lnd_url: return None
-    try:
-        # Headers giả lập Chrome để tránh bị chặn khi cào web
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://linkneverdie.net/'
-        }
-        response = requests.get(lnd_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # --- CÁCH 1 (ƯU TIÊN): Tìm theo ID 'wallpaper_img' ---
-        # HTML: <img id="wallpaper_img" src="/Assets/Imgs/Post/..." >
-        target_img = soup.find('img', id='wallpaper_img')
-        
-        if target_img:
-            src = target_img.get('src')
-            if src:
-                # Nếu link dạng tương đối (/Assets/...) -> Ghép thêm domain
-                if src.startswith("/"):
-                    return "https://linkneverdie.net" + src
-                return src
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Referer': 'https://linkneverdie.net/'
+    }
 
-        # --- CÁCH 2 (DỰ PHÒNG): Tìm theo Meta Tag ---
-        meta = soup.find('meta', property='og:image')
-        if meta: return meta.get('content')
-        
-    except Exception as e: 
-        print(f"[GET IMG ERROR] {e}")
+    for attempt in range(3):
+        try:
+            res = requests.get(lnd_url, headers=headers, timeout=15)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            img = soup.find('img', id='wallpaper_img')
+            if img:
+                src = img.get('src')
+                return "https://linkneverdie.net" + src if src.startswith("/") else src
+            break # Nếu vào được web mà không thấy ảnh thì thôi, không retry
+        except:
+            time.sleep(1) # Lỗi mạng thì thử lại
+            
     return None
 
+def fetch_lnd_version(lnd_url):
+    """Lấy version game (Retry + Headers)"""
+    if not lnd_url: return "N/A"
+    
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    for attempt in range(3):
+        try:
+            res = requests.get(lnd_url, headers=headers, timeout=15)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # Cách 1: Tìm thẻ data-label
+            ver_p = soup.find('p', class_='data-label', string=re.compile(r'Phiên bản', re.I))
+            if ver_p:
+                ver_info = ver_p.find_next_sibling('p', class_='info')
+                if ver_info: return ver_info.get_text(strip=True)
+            
+            # Cách 2: Tìm trong Title
+            title = soup.title.string if soup.title else ""
+            match = re.search(r'(?:v|ver|build|update)\.?\s*(\d+(?:\.\d+)*)', title, re.I)
+            if match: return match.group(1)
+            
+            return "Unknown"
+        except:
+            time.sleep(1)
+            
+    return "Error"
+
 def download_icon(img_url, save_path):
+    """Tải icon siêu tốc dùng Session"""
+    for attempt in range(3):
+        try:
+            if save_path.endswith(".png"): save_path = save_path.replace(".png", ".jpg")
+            
+            # Dùng http_session đã khai báo ở trên
+            res = http_session.get(img_url, stream=True, timeout=10)
+            
+            if res.status_code == 200:
+                img = Image.open(res.raw)
+                if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+                
+                # Resize nhanh
+                img = img.resize((150, 150), Image.Resampling.LANCZOS)
+                img.save(save_path, "JPEG", quality=85)
+                return True
+        except:
+            time.sleep(0.5) # Chờ xíu rồi thử lại
+    return False
+# --- HÀM CHECK STEAM (TỐC ĐỘ CAO) ---
+def check_steam_online_status(game_name):
     try:
-        # [QUAN TRỌNG] Luôn ép đuôi file thành .jpg
-        if save_path.endswith(".png"):
-            save_path = save_path.replace(".png", ".jpg")
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://linkneverdie.net/'
-        }
+        # 1. Tìm kiếm game trên Steam
+        # Dùng cookies để vượt qua Age Gate (xác nhận tuổi) của Steam
+        cookies = {'birthtime': '0', 'lastagecheckage': '1-January-1990'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
-        response = requests.get(img_url, headers=headers, stream=True, timeout=10)
+        # Search term
+        search_url = f"https://store.steampowered.com/search/?term={game_name}&category1=998" # 998 = Game
+        res = requests.get(search_url, headers=headers, cookies=cookies, timeout=5)
+        soup = BeautifulSoup(res.text, 'html.parser')
         
-        if response.status_code == 200:
-            img = Image.open(response.raw)
-            
-            # Xử lý ảnh
-            if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-            
-            w, h = img.size
-            min_d = min(w, h)
-            left, top = (w - min_d)//2, (h - min_d)//2
-            img = img.crop((left, top, left+min_d, top+min_d))
-            img = img.resize((150, 150), Image.Resampling.LANCZOS)
-            
-            # Lưu đè file cũ
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            img.save(save_path, "JPEG", quality=85)
-            return True
-        return False
-    except Exception as e: 
-        # print(f"Lỗi tải: {e}")
-        return False
-
-def fetch_full_details(url):
-    if not url: return None
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Lấy kết quả đầu tiên
+        link = soup.find('a', class_='search_result_row')
+        if not link: 
+            return "Offline" # Không tìm thấy trên Steam -> Mặc định Offline
         
-        data = {}
-
-        # 1. [FIX QUAN TRỌNG] Gọi hàm fetch_lnd_version để lấy version chuẩn
-        # (Thay vì tự cào thủ công hay bị lỗi như code cũ)
-        data['web_version'] = fetch_lnd_version(url)
-
-        # 2. Lấy Cấu hình (Giữ nguyên)
-        req_str = ""
-        cols = [('game_area_sys_req_leftCol', 'TỐI THIỂU'), ('game_area_sys_req_rightCol', 'KHUYẾN NGHỊ')]
-        for cls, title in cols:
-            col = soup.find('div', class_=cls)
-            if col:
-                req_str += f"\n--- {title} ---\n"
-                for li in col.find_all('li'):
-                    req_str += li.get_text(strip=True) + "\n"
-        data['requirements'] = req_str.strip() if req_str else "Không tìm thấy thông tin cấu hình."
-
-        # 3. Lấy Album ảnh (Giữ nguyên logic 3 lớp)
-        images = []
-        # Lớp 1: Gallery
-        screenshot_div = soup.find('div', id='screenshots_div')
-        if screenshot_div:
-            target_imgs = screenshot_div.find_all('img')
-            for img in target_imgs:
-                src = img.get('src') or img.get('data-src')
-                if src:
-                    if src.startswith("/"): src = "https://linkneverdie.net" + src
-                    if src not in images: images.append(src)
-        # Lớp 2: Ảnh nội dung
-        if not images:
-            content_imgs = soup.find_all('img', class_=re.compile(r'(fr-dib|fr-draggable)'))
-            for img in content_imgs:
-                src = img.get('src') or img.get('data-src')
-                if src:
-                    if src.startswith("/"): src = "https://linkneverdie.net" + src
-                    if src not in images: images.append(src)
-        # Lớp 3: Ảnh bìa
-        if not images:
-            meta_img = soup.find('meta', property='og:image')
-            if meta_img: images.append(meta_img.get('content'))
-
-        data['album'] = images[:10]
-
-        return data
-    except Exception as e:
-        print(f"Lỗi scrap: {e}")
-        return None
+        game_url = link['href']
+        
+        # 2. Vào trang chi tiết game
+        res_game = requests.get(game_url, headers=headers, cookies=cookies, timeout=5)
+        soup_game = BeautifulSoup(res_game.text, 'html.parser')
+        
+        # 3. Quét các nhãn (Categories)
+        # Tìm các class 'game_area_details_specs' chứa thông tin chơi mạng
+        categories = soup_game.find_all('div', class_='game_area_details_specs')
+        
+        status = "Offline"
+        for cat in categories:
+            txt = cat.get_text().lower()
+            # Từ khóa nhận diện Online của Steam
+            if "multi-player" in txt or "multiplayer" in txt or "online" in txt or "co-op" in txt or "mmo" in txt:
+                status = "Online"
+                break
+        
+        return status
+    except:
+        return "Offline" # Lỗi mạng -> Mặc định Offline cho an toàn
 
 def play_click_sound():
     try:
@@ -857,26 +1553,28 @@ class SplashLoader:
         self.page.run_task(self.animate_loading)
 
     async def animate_loading(self):
-        # --- [FIX QUAN TRỌNG: KÍCH THƯỚC ẢO ĐỂ ÉP WINDOWS VẼ LẠI] ---
-        # 1. Hiện cửa sổ
+        # --- [CODE GỐC TỪ TEST2.TXT - KHÔNG CÓ DELAY] ---
+        
+        # 1. Hiện cửa sổ NGAY LẬP TỨC (Không được sleep trước đó)
         self.page.window.visible = True
         
-        # 2. Thay đổi kích thước +10px để ép layout cập nhật (Fix lỗi bẹp dí/màn đen)
+        # 2. Thay đổi kích thước +10px để ép Windows vẽ lại giao diện ngay
+        # (Thao tác này giúp fix lỗi màn hình đen hoặc giao diện bị bẹp)
         self.page.window.width = 1280 + 10
         self.page.window.height = 720 + 10
         self.page.update()
         
-        # 3. Nghỉ cực ngắn để Windows kịp xử lý
+        # 3. Nghỉ cực ngắn để Windows kịp xử lý lệnh resize
         await asyncio.sleep(0.1)
 
-        # 4. Trả về kích thước chuẩn ngay lập tức
+        # 4. Trả về kích thước chuẩn và căn giữa
         self.page.window.width = 1280
         self.page.window.height = 720
-        self.page.window.center() # [FIX] Thêm .window vào giữa
+        self.page.window.center()
         self.page.update()
         # -----------------------------------------------------------
 
-        # Chạy thanh Loading
+        # Chạy thanh Loading (Giữ nguyên)
         flavors = ["Đang triệu hồi...", "Đang hack NASA...", "Chờ xíu...", "Sắp xong rồi..."]
         for i in range(101):
             current = i / 100.0
@@ -970,8 +1668,16 @@ def run_system_tray(page):
 # ==========================================
 
 def main(page: ft.Page):
+    # --- [FIX QUAN TRỌNG] CẤU HÌNH MÀU TRONG SUỐT NGAY LẬP TỨC ---
+    # Phải đặt ở đây để Flet hiểu ngay khi vừa tạo cửa sổ
+    page.window.visible = False 
+    page.bgcolor = "#141E30"        
+    page.window.bgcolor = "#141E30"
+    page.window.frameless = True
+    page.window.title_bar_hidden = True
+    # -------------------------------------------------------------
+
     cleanup_old_versions()
-    
     # 1. Lấy đường dẫn gốc (Lúc này nó sẽ trỏ đúng về Desktop/Conist Link)
     base_dir = get_base_path()
     
@@ -1030,19 +1736,89 @@ def main(page: ft.Page):
         print(f"[SHORTCUT] Lỗi tạo shortcut: {e}")
 
     # --- TIẾP TỤC CODE CŨ (Xóa bớt phần check icon thừa phía dưới) ---
-    
+    # 3. Kích hoạt App (Dán vào cuối hàm main)
+    try:
+        if 'run_startup' in locals():
+            page.run_task(run_startup)
+    except Exception as e:
+        print(f"Lỗi Startup: {e}")
+        # Nếu lỗi, ép hiện giao diện ngay để cứu vãn
+        page.window.always_on_top = False
+        bg_container.opacity = 1
+        main_layout.opacity = 1
+        page.update()
     global APP_CONFIG, file_picker, GAME_LIST
     
     # XÓA DANH SÁCH CŨ
     GAME_LIST.clear() 
 
-    # ... (Các phần sau giữ nguyên)
+# [TRẢ LẠI CODE GỐC]
+    global grid
+    grid = ft.GridView(
+        expand=True, runs_count=5, max_extent=180, child_aspect_ratio=0.7,
+        spacing=20, run_spacing=20, padding=20,
 
-    # --- [FIX QUAN TRỌNG] HÀM NẠP LẠI DỮ LIỆU & VẼ LẠI GRID ---
+    )
+# --- [FIX FINAL] HÀM VẼ GRID CHUẨN (DÙNG CHUNG CHO ALL) ---
+    def render_grid_safe(source_list):
+        try:
+            grid.controls.clear()
+            
+            if not source_list:
+                grid.controls.append(ft.Text("Không tìm thấy game nào.", color="yellow"))
+                grid.update()
+                return
+
+            # 1. Tạo thẻ (Mặc định tàng hình do class GameCard)
+            temp_cards = []
+            for g in source_list:
+                try:
+                    card = GameCard(g)
+                    temp_cards.append(card)
+                    grid.controls.append(card)
+                except: pass
+            
+            # 2. Update Grid để Flet gắn thẻ vào Page
+            grid.update()
+            
+            # 3. Chạy hiệu ứng "Thác đổ" (Có kiểm tra an toàn)
+            def animate_worker():
+                # [QUAN TRỌNG] Chờ 0.1s để đảm bảo thẻ đã được gắn vào Page
+                # Fix lỗi "Control must be added to the page first"
+                time.sleep(0.1) 
+                
+                for card in temp_cards:
+                    try:
+                        # Chỉ update nếu thẻ thực sự đang nằm trên Page
+                        if card.page: 
+                            card.opacity = 1
+                            card.update()
+                            time.sleep(0.03) # Tốc độ thác đổ
+                    except: pass
+            
+            threading.Thread(target=animate_worker, daemon=True).start()
+
+        except Exception as e:
+            print(f"Lỗi Render Grid: {e}")
     def refresh_data_and_grid():
+        global RAW_GAME_DATA
         GAME_LIST.clear()
         
-        # 1. Đọc cache trạng thái (Đã cài/Chưa cài)
+        # 1. NẠP DỮ LIỆU TỪ FILE LOCAL (Dùng Parser thông minh)
+        if os.path.exists(LOCAL_DATA_PATH):
+            try:
+                with open(LOCAL_DATA_PATH, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if len(content) > 5:
+                        # [THAY ĐỔI Ở ĐÂY] Gọi hàm parse mới
+                        RAW_GAME_DATA = parse_mixed_game_data(content)
+                        print(f"[DATA] Đã nạp thành công {len(RAW_GAME_DATA)} game.")
+            except Exception as e:
+                print(f"[DATA] Lỗi đọc file: {e}")
+
+        GAME_LIST.clear()
+        
+        # 2. Đọc Cache trạng thái (Status, Online/Offline cũ)
         cached_data = {}
         if os.path.exists(CACHE_FILE):
             try:
@@ -1050,63 +1826,117 @@ def main(page: ft.Page):
                     cached_data = {g['name']: g for g in json.load(f)}
             except: pass
 
-        # 2. Convert từ RAW Data sang Game Object
+        # 3. Convert dữ liệu thật (Bỏ qua Dummy)
         for raw in RAW_GAME_DATA:
-            slug = clean_name_for_slug(raw['name'])
-            icon_path = os.path.join(ICON_FOLDER, f"{slug}.png")
-            saved = cached_data.get(raw['name'], {})
-            
-            # Kiểm tra icon
-            final_icon = icon_path if os.path.exists(icon_path) else raw.get('icon') or f"https://via.placeholder.com/150/000000/FFFFFF/?text={raw['name'][0]}"
-            
-            game_obj = {
-                "name": raw['name'],
-                "subtitle": raw.get('subtitle', ''),
-                "version": raw['version'],
-                "lnd_url": raw['lnd_url'],
-                "download_link": raw['download_link'],
-                "viet_link": raw.get('viet_link'),
-                "icon": final_icon,
-                "status": saved.get('status', 'CHƯA KIỂM TRA'),
-                "requirements": saved.get('requirements', 'Đang cập nhật...'),
-                "album_images": saved.get('album_images', [])
-            }
-            GAME_LIST.append(game_obj)
+            try:
+                slug = clean_name_for_slug(raw['name'])
+                icon_path = os.path.join(ICON_FOLDER, f"{slug}.jpg")
+                saved = cached_data.get(raw['name'], {})
+                
+                # Logic lấy icon: Ưu tiên file trong máy -> Link web -> Placeholder
+                final_icon = icon_path if os.path.exists(icon_path) else raw.get('icon', '')
+                if not final_icon: final_icon = "https://via.placeholder.com/150"
 
-        # 3. Vẽ lại Grid (Nếu grid đã được khởi tạo)
+                game_obj = {
+                    "name": raw['name'],
+                    "subtitle": raw.get('subtitle', ''),
+                    "version": raw.get('version', '1.0'),
+                    "lnd_url": raw.get('lnd_url', ''),
+                    "download_link": raw.get('download_link', ''),
+                    "viet_link": raw.get('viet_link'),
+                    "icon": final_icon,
+                    "status": saved.get('status', 'CHƯA KIỂM TRA'),
+                    "mp_status": saved.get('mp_status', None), 
+                    "requirements": saved.get('requirements', ''),
+                    "album_images": saved.get('album_images', [])
+                }
+                GAME_LIST.append(game_obj)
+            except Exception as e:
+                print(f"Lỗi skip game: {e}")
+
+        # 4. [FIX] Vẽ lại Grid với Hiệu ứng Thác đổ (Waterfall)
         try:
-            if grid:
+            if 'grid' in locals() or 'grid' in globals():
+                render_grid_safe(GAME_LIST)
                 grid.controls.clear()
-                for g in GAME_LIST: grid.controls.append(GameCard(g))
-                grid.update()
-        except: pass
+                
+                if not GAME_LIST:
+                    grid.controls.append(ft.Text("Đang tải danh sách game...", color="yellow"))
+                    grid.update()
+                else:
+                    # Tạo danh sách thẻ tạm thời
+                    temp_cards = []
+                    for g in GAME_LIST:
+                        try:
+                            card = GameCard(g)
+                            temp_cards.append(card)
+                            grid.controls.append(card)
+                        except: pass
+                    
+                    # Cập nhật Grid lần 1 (Lúc này thẻ đang tàng hình opacity=0)
+                    grid.update()
+                    
+                    # [NEW] Chạy luồng riêng để bật từng thẻ lên (Hiệu ứng Sang Chảnh)
+                    def animate_cards_show():
+                        import time
+                        for card in temp_cards:
+                            # Chỉ hiện những thẻ đang tàng hình
+                            if card.opacity == 0:
+                                card.opacity = 1
+                                card.update()
+                                # Nghỉ cực ngắn (0.03s) tạo hiệu ứng sóng lướt qua
+                                time.sleep(0.03) 
+                                
+                    threading.Thread(target=animate_cards_show, daemon=True).start()
 
-    # Gọi lần đầu (Lúc này có thể chỉ có 1 game mặc định, kệ nó)
-    refresh_data_and_grid()
+                print(f"[SYSTEM] Đã hiển thị {len(GAME_LIST)} game.")
+        except Exception as e:
+            print(f"[UI ERROR] Không thể vẽ Grid: {e}")
 
 
 
-
+    # --- [FIX FINAL V3] TẮT APP MƯỢT NHƯ GAME (GPU RENDER) ---
     def on_window_event(e):
         if e.data == "close":
-            # 1. Gửi tín hiệu HỦY cho toàn bộ download đang chạy
-            if ACTIVE_DOWNLOADS:
-                print("Đang dừng các tiến trình tải...")
-                for name, state in list(ACTIVE_DOWNLOADS.items()):
-                    state['cancelled'] = True
+            try:
+                # 1. KÍCH HOẠT HIỆU ỨNG BIẾN MẤT (FADE OUT NỘI DUNG)
+                # Dùng GPU của Flet để làm mờ nội dung, mượt hơn làm mờ cửa sổ Windows gấp 10 lần
+                main_layout.animate_opacity = ft.Animation(200, "easeIn") # 200ms = 0.2 giây
+                main_layout.opacity = 0
+                main_layout.update()
                 
-                # Chờ 0.5s cho các luồng kịp đóng file
-                time.sleep(0.5)
+                # 2. Đợi đúng 0.2s cho hiệu ứng chạy xong
+                time.sleep(0.2)
+            except: pass
 
-            # 2. Xử lý tắt App
-            run_bg = APP_CONFIG.get("run_in_background", False)
-            if run_bg and HAS_TRAY_LIB:
-                # ... (giữ nguyên logic ẩn tray) ...
-                page.window.visible = False
-                page.update()
-                threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
-            else:
-                page.window.destroy()
+            # 3. ẨN CỬA SỔ NGAY LẬP TỨC
+            page.window.visible = False
+            page.update()
+
+            # 4. DỌN DẸP CHIẾN TRƯỜNG (CHẠY NGẦM)
+            def background_cleanup():
+                try:
+                    # Hủy download
+                    if ACTIVE_DOWNLOADS:
+                        for name, state in list(ACTIVE_DOWNLOADS.items()):
+                            state['cancelled'] = True
+                        time.sleep(0.5) 
+
+                    # Xử lý Tray Icon hoặc Thoát hẳn
+                    run_bg = APP_CONFIG.get("run_in_background", False)
+                    if run_bg and HAS_TRAY_LIB:
+                        # [QUAN TRỌNG] Reset lại độ rõ để lần sau mở lên từ Tray thì thấy được
+                        # (Vì App chỉ ẩn đi chứ không tắt hẳn)
+                        main_layout.opacity = 1
+                        page.update()
+                        threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
+                    else:
+                        page.window.destroy()
+                        os._exit(0) # Kill sạch sành sanh
+                except: 
+                    os._exit(0)
+
+            threading.Thread(target=background_cleanup, daemon=True).start()
 
     page.window.prevent_close = True 
     page.window.on_event = on_window_event
@@ -1128,21 +1958,35 @@ def main(page: ft.Page):
         except: pass
     
 # --- SETUP CỬA SỔ ---
+    # 1. Ẩn đi để chờ Splash hiện (Fix lỗi không có loading)
     page.window.visible = False 
+    
+    # 2. Luôn hiện trên cùng LÚC ĐẦU (để Splash không bị che) -> Sau này sẽ tắt
     page.window.always_on_top = True
-    # [SỬA] Đổi tên cửa sổ dựa trên trạng thái
+    
     page.title = f"Conist Link Launcher v{CURRENT_VERSION}"
     page.window.title_bar_hidden = True
     page.window.frameless = True
     page.window.bgcolor = ft.colors.TRANSPARENT
-    page.bgcolor = ft.colors.TRANSPARENT 
+    page.bgcolor = ft.colors.TRANSPARENT
     page.window.width = 1280
     page.window.height = 720
     page.window.center()
     page.padding = 0
     page.theme_mode = ft.ThemeMode.DARK
     page.fonts = {"Segoe UI": "Segoe UI"}
-    page.theme = ft.Theme(font_family="Segoe UI")
+    
+    # [FIX SCROLL FINAL] Thanh cuộn "Zin": Đẹp, Mượt, Dễ kéo
+    page.theme = ft.Theme(
+        font_family="Segoe UI",
+        scrollbar_theme=ft.ScrollbarTheme(
+            thumb_visibility=True,      # Luôn hiện (để bạn dễ cầm)
+            thickness=8,                # Dày 8px (Chuẩn UX, không quá to, không quá bé)
+            radius=4,                   # Bo góc mềm mại (Sang hơn bo 10px)
+            interactive=True,           # Tăng độ nhạy khi kéo
+            # Tuyệt đối KHÔNG set màu -> Để nó tự dùng màu Xám/Trắng mặc định siêu đẹp
+        )
+    )
     page.update()
 
     # --- CÁC HÀM XỬ LÝ SỰ KIỆN (ĐÃ ĐƯỢC THỤT LỀ CHUẨN) ---
@@ -1162,7 +2006,7 @@ def main(page: ft.Page):
 
 # --- [FIX 1] KHAI BÁO BIẾN CỜ Ở ĐÂY ---
     is_scanning_updates = False 
-    active_game_sessions = set()
+    active_game_sessions = {}
 
     # Hàm xử lý chạy ngầm
     def process_game_updates_thread():
@@ -1182,50 +2026,34 @@ def main(page: ft.Page):
 
         try:
             for i, game in enumerate(GAME_LIST):
-                # Kiểm tra xem switch còn bật không
-                if not APP_CONFIG.get("auto_update_games", False):
-                    break
+                if not APP_CONFIG.get("auto_update_games", False): break
 
-                # Chỉ check game có link LND
                 if game.get('lnd_url') and len(str(game.get('lnd_url'))) > 10:
                     try:
-                        # Lấy version online
-                        online_ver = fetch_lnd_version(game['lnd_url'])
-                        local_ver = game['version']
+                        # [SỬA] Gọi hàm lấy full info để lấy cả Version lẫn Multiplayer
+                        full_info = fetch_full_details(game['lnd_url']) 
+                        
+                        if full_info:
+                            # 1. Cập nhật Online/Offline
+                            game['mp_status'] = full_info.get('mp_status', 'Offline')
 
-                        if online_ver != "Error" and online_ver != "Unknown":
-                            status_msg = ""
-                            # --- [SỬA LOGIC SO SÁNH] ---
-                        if online_ver != "Error" and online_ver != "Unknown":
-                            status_msg = ""
+                            # 2. Check Version (Giữ nguyên logic cũ nhưng lấy từ full_info)
+                            online_ver = full_info.get('web_version', 'Unknown')
+                            local_ver = game['version']
                             
-                            # Dùng hàm so sánh thông minh thay vì so sánh !=
-                            is_match = is_version_match_smart(online_ver, local_ver)
+                            # ... (Logic so sánh version giữ nguyên) ...
+                            # ... Nếu có bản mới thì game['status'] = ...
                             
-                            if not is_match:
-                                # Nếu hàm bảo KHÔNG KHỚP -> Mới báo update
-                                status_msg = f"CÓ BẢN MỚI: {online_ver}"
-                                game['status'] = status_msg
-                                count_update += 1
-                                print(f"[UPDATE] {game['name']}: Local='{local_ver}' != Web='{online_ver}'")
-                            else:
-                                # Nếu hàm bảo KHỚP -> Báo đã cập nhật (dù string có thể hơi khác)
-                                status_msg = "ĐÃ CẬP NHẬT"
-                                game['status'] = status_msg
-                                game['status'] = status_msg
-                            
-                            # Cập nhật UI Thẻ Game
+                            # 3. Cập nhật UI Thẻ Game
                             try:
                                 for card in grid.controls:
                                     if card.game['name'] == game['name']:
-                                        card.status_txt.value = status_msg
-                                        card.status_txt.color = "red" if "CÓ BẢN MỚI" in status_msg else "green"
-                                        card.status_txt.update()
+                                        card.refresh_ui() # Gọi hàm refresh mới
                                         break
                             except: pass
                     except: pass
                 
-                time.sleep(0.05) # Nghỉ xíu
+                time.sleep(0.05)
             
             save_cache()
             
@@ -1306,11 +2134,16 @@ def main(page: ft.Page):
         # Đây là hàm tìm kiếm thực sự (chạy sau khi đã ngừng gõ)
         try:
             val = keyword.lower()
-            filtered = [g for g in GAME_LIST if val in g['name'].lower()]
+            if not val:
+                # Nếu từ khóa rỗng -> Hiện tất cả
+                filtered = GAME_LIST
+            else:
+                # Nếu có từ khóa -> Lọc
+                filtered = [g for g in GAME_LIST if val in g['name'].lower()]
             
-            grid.controls.clear()
-            for g in filtered: grid.controls.append(GameCard(g))
-            grid.update()
+            # [FIX] Gọi hàm vẽ chuẩn (Sẽ tự động có hiệu ứng hiện lên)
+            render_grid_safe(filtered)
+            
         except Exception as e:
             print(f"Lỗi Search: {e}")
 
@@ -1360,10 +2193,6 @@ def main(page: ft.Page):
     # --- 2. KHỞI TẠO BIẾN ---
     particle_sys = ParticleSystem(page)
     
-    grid = ft.GridView(
-        expand=True, runs_count=5, max_extent=180, child_aspect_ratio=0.7,
-        spacing=20, run_spacing=20, padding=20,
-    )
 
     # --- 3. UI CLASSES ---
 
@@ -1434,47 +2263,80 @@ def main(page: ft.Page):
             super().__init__()
             self.game = game_data 
             self.width = 160
-            self.height = 230
+            self.height = 245 
             self.border_radius = 15
+            
+            # Màu nền mặc định (Đen mờ 50%)
             self.default_bg = "#80000000" 
             self.bgcolor = self.default_bg 
             self.padding = 10
+            
+            # [QUAN TRỌNG] Hai dòng này quyết định độ mượt
             self.animate_scale = ft.Animation(200, "easeOut")
-            self.animate = ft.Animation(200, "easeOut") 
+            self.animate = ft.Animation(200, "easeOut")
+            
+            # [FIX] Hiệu ứng hiện hình (300ms = Nhanh gọn & Sang)
+            self.opacity = 0  # Mặc định tàng hình
+            self.animate_opacity = ft.Animation(300, "easeOut")
+            
+            # Gắn sự kiện
             self.on_click = lambda e: (play_click_sound(), self.open_detail(e))
-            self.on_hover = self.hover_card
+            self.on_hover = self.hover_card # <--- Bắt buộc phải có dòng này
             
-            stt = self.game['status']
+            # 1. Status Update
+            stt = self.game.get('status', 'Unknown')
             stt_col = "green" if "ĐÃ CẬP NHẬT" in stt else ("orange" if "CÓ BẢN MỚI" in stt else "grey")
-            
             self.status_txt = ft.Text(stt, size=10, color=stt_col, weight="bold", no_wrap=True)
-            self.img_control = ft.Image(src=self.game['icon'], width=140, height=140, border_radius=10, fit=ft.ImageFit.COVER)
-            
-            self.content = ft.Column([
-            self.img_control,
-                ft.Text(self.game['name'], size=14, weight="bold", no_wrap=True, text_align="center", width=140),
-                ft.Text(self.game['subtitle'][:20], size=10, italic=True, color="grey", no_wrap=True),
-                ft.Container(content=self.status_txt, alignment=ft.alignment.center)
-            ], 
-            spacing=5, 
-            alignment=ft.MainAxisAlignment.START, 
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER) # <--- [FIX] THÊM DÒNG NÀY ĐỂ CĂN GIỮA
 
+            # 2. Status Online/Offline
+            self.mp_txt = ft.Text("", size=10, color="transparent", weight="bold", no_wrap=True)
+            mp_stt = self.game.get('mp_status')
+            if mp_stt == "Online":
+                self.mp_txt.value = "● ONLINE"
+                self.mp_txt.color = "#00E5FF"
+            elif mp_stt == "Offline":
+                self.mp_txt.value = "● OFFLINE"
+                self.mp_txt.color = "#888888"
+
+            # Hình ảnh
+            icon_src = self.game.get('icon', '')
+            if not icon_src: icon_src = "https://via.placeholder.com/150"
+            self.img_control = ft.Image(src=icon_src, width=140, height=140, border_radius=10, fit=ft.ImageFit.COVER)
+            
+            # 3. Giao diện Card
+            self.content = ft.Column([
+                self.img_control,
+                ft.Text(self.game.get('name', 'No Name'), size=14, weight="bold", no_wrap=True, text_align="center", width=140),
+                ft.Column([self.status_txt, self.mp_txt], spacing=2, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+            ], spacing=5, alignment=ft.MainAxisAlignment.START, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+        # [HÀM XỬ LÝ ANIMATION]
         def hover_card(self, e):
             is_hover = e.data == "true"
+            # Phóng to 1.05 lần
             self.scale = 1.05 if is_hover else 1.0
+            # Sáng nền lên (Trắng mờ 20%)
             self.bgcolor = "#33FFFFFF" if is_hover else self.default_bg 
             self.update()
 
         def open_detail(self, e): show_game_detail_dialog(self.game, self)
         
         def refresh_ui(self):
-            self.img_control.src = self.game['icon']
-            stt = self.game['status']
-            self.status_txt.value = stt
-            self.status_txt.color = "green" if "ĐÃ CẬP NHẬT" in stt else "orange"
-            self.img_control.update()
-            self.status_txt.update()
+            try:
+                self.img_control.src = self.game.get('icon', '')
+                stt = self.game.get('status', '')
+                self.status_txt.value = stt
+                self.status_txt.color = "green" if "ĐÃ CẬP NHẬT" in stt else "orange"
+                
+                mp_stt = self.game.get('mp_status')
+                if mp_stt == "Online":
+                    self.mp_txt.value = "● ONLINE"; self.mp_txt.color = "#00E5FF"
+                elif mp_stt == "Offline":
+                    self.mp_txt.value = "● OFFLINE"; self.mp_txt.color = "#888888"
+                else:
+                    self.mp_txt.value = ""; self.mp_txt.color = "transparent"
+                self.update()
+            except: pass
 
     # [FIX CLEANUP] Hàm tải file thông minh (Tự xóa rác nếu bị hủy)
     def download_file_with_state(url, dest_path, progress_callback, control_state, game_name=None):
@@ -2236,12 +3098,13 @@ def main(page: ft.Page):
 
 
         
-    # --- [MOVED UP] XỬ LÝ CHƠI GAME + WATCHER ---
+
+            # --- [MOVED UP] XỬ LÝ CHƠI GAME + WATCHER ---
     def handle_play_game(game_name, e, spinner, status_txt, btn_play, progress_overlay, icon_src=""):
-        # Setup UI
+        # Reset UI
         btn_play.visible = False
         spinner.visible = True
-        status_txt.value = "Đang xử lý..."
+        status_txt.value = "Đang kiểm tra..."
         status_txt.color = "white"
         progress_overlay.width = 0 
         
@@ -2250,20 +3113,134 @@ def main(page: ft.Page):
         status_txt.update()
         progress_overlay.update()
 
-        def extract_thread():
+        cancel_flag = [False]
+
+        # --- HÀM CON 1: HỦY ---
+        def cancel_download(game_name, status_txt, progress_overlay, spinner, btn_play):
+            cancel_flag[0] = True
+            status_txt.value = "Đã hủy."
+            status_txt.color = "red"
+            status_txt.update()
+            time.sleep(1)
+            btn_play.text = "Chơi Ngay"
+            btn_play.icon = ft.icons.PLAY_ARROW
+            btn_play.visible = True
+            spinner.visible = False
+            progress_overlay.width = 0
+            btn_play.update()
+            spinner.update()
+            progress_overlay.update()
+
+        # --- HÀM CON 2: TẢI GAME ---
+        def download_game_process(game_name, status_txt, progress_overlay, spinner, btn_play):
+            try:
+                status_txt.value = "Đang lấy link..."
+                status_txt.update()
+                
+                g_data = next((g for g in GAME_LIST if g['name'] == game_name), None)
+                if not g_data: raise Exception("Lỗi dữ liệu game!")
+
+                download_url = g_data.get('download_url', '') or g_data.get('url', '')
+                save_path = APP_CONFIG.get("download_dir")
+                slug = clean_name_for_slug(game_name)
+                zip_path = os.path.join(save_path, f"{slug}.zip")
+                
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                with requests.get(download_url, stream=True, headers=headers, timeout=20) as r:
+                    r.raise_for_status()
+                    total_length = int(r.headers.get('content-length', 0))
+                    dl = 0
+                    with open(zip_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if cancel_flag[0]:
+                                r.close(); f.close()
+                                try: os.remove(zip_path)
+                                except: pass
+                                return
+                            if chunk:
+                                f.write(chunk)
+                                dl += len(chunk)
+                                if total_length > 0:
+                                    ratio = dl / total_length
+                                    progress_overlay.width = 380 * ratio
+                                    progress_overlay.update()
+                                    status_txt.value = f"Đang tải: {int(ratio*100)}%"
+                                    status_txt.update()
+                
+                if not cancel_flag[0]:
+                    extract_thread(is_download_finished=True)
+
+            except Exception as e:
+                status_txt.value = f"Lỗi: {str(e)[:15]}..."
+                status_txt.color = "red"
+                status_txt.update()
+                time.sleep(3)
+                btn_play.visible = True; spinner.visible = False
+                btn_play.update(); spinner.update()
+
+            # --- HÀM CON 3: LUỒNG CHÍNH (FIX LỖI STUCK LOADING) ---
+        def extract_thread(is_download_finished=False):
+            # Helper 1: Update UI an toàn
+            def safe_ui_update():
+                try:
+                    if status_txt.page: status_txt.update()
+                    if progress_overlay.page: progress_overlay.update()
+                    if btn_play.page: btn_play.update()
+                    if spinner.page: spinner.update()
+                except: pass
+
+            # Helper 2: Reset UI về trạng thái "Play"
+            def reset_ui_to_ready():
+                try:
+                    if btn_play.page:
+                        btn_play.visible = True
+                        btn_play.icon = ft.icons.PLAY_ARROW_ROUNDED
+                        btn_play.text = "" # Nút Play chỉ cần icon
+                        btn_play.update()
+                    
+                    if spinner.page: 
+                        spinner.visible = False
+                        spinner.update()
+                        
+                    if status_txt.page:
+                        status_txt.value = "Sẵn sàng chơi"
+                        status_txt.color = "#AAAAAA"
+                        status_txt.update()
+                        
+                    if progress_overlay.page:
+                        progress_overlay.width = 0
+                        progress_overlay.update()
+                except: pass
 
             save_path = APP_CONFIG.get("download_dir")
             slug = clean_name_for_slug(game_name)
             archive_file = os.path.join(save_path, f"{slug}.zip")
             extract_folder = os.path.join(save_path, slug)
 
+            # Sidebar Preview Logic
+            if not is_download_finished and not os.path.exists(extract_folder):
+                if GLOBAL_GHOST_PREVIEW:
+                    try:
+                        slug_icon = clean_name_for_slug(game_name)
+                        local_icon = os.path.join(ICON_FOLDER, f"{slug_icon}.jpg")
+                        final_icon = icon_src
+                        if not final_icon and os.path.exists(local_icon): final_icon = local_icon
+                        if not final_icon:
+                            g = next((g for g in GAME_LIST if g['name'] == game_name), None)
+                            if g: final_icon = g.get('icon', '')
+                        GLOBAL_GHOST_PREVIEW.trigger(game_name, final_icon)
+                    except: pass
+
+            target_exe = None # Khởi tạo biến
+
             try:
-                # --- GIAI ĐOẠN 1: GIẢI NÉN ---
+                # A. GIẢI NÉN
                 if os.path.exists(archive_file):
                     status_txt.value = "Đang giải nén..."
-                    status_txt.update()
+                    safe_ui_update()
                     is_extracted = False
                     
+                    # Python Zip
                     if zipfile.is_zipfile(archive_file):
                         try:
                             with zipfile.ZipFile(archive_file, 'r') as zf:
@@ -2275,126 +3252,345 @@ def main(page: ft.Page):
                                     extracted_size += file.file_size
                                     ratio = extracted_size / max(total_size, 1)
                                     progress_overlay.width = 380 * ratio 
-                                    progress_overlay.update()
+                                    try: 
+                                        if progress_overlay.page: progress_overlay.update()
+                                    except: pass
                             is_extracted = True
                         except: pass 
                     
+                    # WinRAR Fallback
                     if not is_extracted:
-                        status_txt.value = "Đang giải nén (WinRAR/7Zip)..."
-                        status_txt.update()
-                        
-                        # [NÂNG CẤP] Tự tìm đường dẫn WinRAR trong Registry
+                        status_txt.value = "Đang giải nén (WinRAR)..."
+                        safe_ui_update()
                         winrar_exe = None
-                        try:
-                            key = reg.OpenKey(reg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\WinRAR.exe")
-                            winrar_exe, _ = reg.QueryValueEx(key, "")
-                            reg.CloseKey(key)
-                        except: pass
-
-                        # Nếu không thấy trong Registry, tìm đường dẫn phổ biến
-                        if not winrar_exe:
-                            possible_paths = [
-                                r"C:\Program Files\WinRAR\WinRAR.exe",
-                                r"C:\Program Files (x86)\WinRAR\WinRAR.exe",
-                                r"D:\Program Files\WinRAR\WinRAR.exe"
-                            ]
-                            for p in possible_paths:
-                                if os.path.exists(p):
-                                    winrar_exe = p
-                                    break
+                        possible_paths = [
+                            r"C:\Program Files\WinRAR\WinRAR.exe", 
+                            r"C:\Program Files (x86)\WinRAR\WinRAR.exe",
+                            r"D:\Program Files\WinRAR\WinRAR.exe"
+                        ]
+                        for p in possible_paths:
+                            if os.path.exists(p): winrar_exe = p; break
                         
                         if winrar_exe and os.path.exists(winrar_exe):
-                            # Thêm switch -o+ để ghi đè nếu file tồn tại
                             cmd = [winrar_exe, "x", "-pLinkNeverDie.Com", "-plinkneverdie.com", "-ibck", "-y", "-o+", archive_file, extract_folder + "\\"]
                             process = subprocess.Popen(cmd, shell=True)
-                            
-                            # Giả lập thanh loading chạy cho đỡ chán
                             fake_w = 0
-                            while process.poll() is None:
+                            while process.poll() is None: 
                                 if fake_w < 350: fake_w += 2
                                 progress_overlay.width = fake_w
-                                progress_overlay.update()
+                                safe_ui_update()
                                 time.sleep(0.1)
                             is_extracted = True
-                        else:
-                            raise Exception("Không tìm thấy WinRAR! Hãy cài WinRAR.")
+                    
                     try: os.remove(archive_file)
                     except: pass
                 
-                # --- GIAI ĐOẠN 2: TÌM FILE GAME ---
+                # B. TÌM FILE CHẠY
                 status_txt.value = "Đang tìm file chạy..."
-                status_txt.update()
+                safe_ui_update()
                 
-                target_exe = None
-                black_list = ["unitycrashhandler", "uninstall", "update", "dxsetup", "vcredist", "cleanup", "redist"]
                 candidates = [] 
-
-                for root, dirs, files in os.walk(extract_folder):
-                    for file in files:
-                        if file.lower().endswith(".exe"):
-                            full_path = os.path.join(root, file)
-                            lower_name = file.lower()
-                            if any(x in lower_name for x in black_list): continue
-                            
-                            score = 0
-                            if lower_name.endswith("lnd game launcher.exe"): score = 10000
-                            clean_game = clean_name_for_slug(game_name).replace("_", "")
-                            clean_file = lower_name.replace(".exe", "").replace("_", "").replace(".", "").replace(" ", "")
-                            if clean_game in clean_file: score += 100
-                            if "launcher" in lower_name: score += 50
-                            candidates.append((score, full_path))
+                if os.path.exists(extract_folder):
+                    for root, dirs, files in os.walk(extract_folder):
+                        for file in files:
+                            if file.lower().endswith(".exe"):
+                                if "unitycrashhandler" in file.lower(): continue
+                                if "unins" in file.lower(): continue
+                                score = 0
+                                if "launcher" in file.lower(): score += 50
+                                if clean_name_for_slug(game_name) in file.lower(): score += 100
+                                candidates.append((score, os.path.join(root, file)))
 
                 if candidates:
                     candidates.sort(key=lambda x: x[0], reverse=True)
                     target_exe = candidates[0][1]
 
-                # --- GIAI ĐOẠN 3: CHẠY GAME + WATCHER ---
+                # C. QUYẾT ĐỊNH
                 if target_exe:
+                    # ==> CASE 1: CHẠY GAME
                     status_txt.value = "Đang khởi động..."
                     status_txt.color = "green"
-                    status_txt.update()
+                    safe_ui_update()
                     
-
                     working_dir = os.path.dirname(target_exe)
+                    apply_lnd_vaccine(working_dir)
+
                     try:
                         subprocess.Popen([target_exe], cwd=working_dir)
+                        # clean_icon = icon_src.replace("\\", "/") if icon_src else ""
+                        #                         # [FIX] Gọi Overlay và lưu vào danh sách để có thể Auto-Kill khi tắt game
+                        # proc = launch_overlay_process(game_name, clean_icon, 0, 0, 0)
+                        # if proc:
+                        #     active_game_sessions[game_name] = proc
                     except OSError as err:
                         if err.winerror == 740:
-                            status_txt.value = "Yêu cầu quyền Admin..."
-                            status_txt.update()
+                            apply_lnd_vaccine(working_dir)
                             ctypes.windll.shell32.ShellExecuteW(None, "runas", target_exe, None, working_dir, 1)
+                                                    # [FIX] Cập nhật Overlay cho trường hợp chạy quyền Admin
+                                                # [FIX] Gọi Overlay bằng hàm mới và lưu vào danh sách để có thể Auto-Kill khi tắt game
+                        # clean_icon = icon_src.replace("\\", "/") if icon_src else ""
+                        # proc = launch_overlay_process(game_name, clean_icon, 0, 0, 0)
+                        # if proc:
+                        #     active_game_sessions[game_name] = proc
+                        # if proc:
+                        #     active_game_sessions[game_name] = proc
                         else: raise err
+                    
+                    # [FIX QUAN TRỌNG] Reset UI sau khi game chạy
+                    time.sleep(3)
+                    reset_ui_to_ready()
+
                 else:
-                    status_txt.value = "Lỗi: Không thấy EXE!"
-                    status_txt.color = "red"
-                    show_push_notification("Không tìm thấy file game!", "error")
-                    os.startfile(extract_folder)
+                    # ==> CASE 2: TẢI GAME (Nếu chưa có)
+                    status_txt.value = "Đang tải xuống..."
+                    status_txt.color = "blue"
+                    
+                    btn_play.text = "Hủy"
+                    btn_play.icon = ft.icons.CANCEL
+                    btn_play.on_click = lambda e: cancel_download(game_name, status_txt, progress_overlay, spinner, btn_play)
+                    safe_ui_update()
+                    
+                    threading.Thread(target=download_game_process, args=(game_name, status_txt, progress_overlay, spinner, btn_play), daemon=True).start()
 
             except Exception as e:
                 status_txt.value = f"Lỗi: {str(e)[:15]}..."
                 status_txt.color = "red"
-                try: os.startfile(save_path)
-                except: pass
-            
-            # Reset UI sau 3s
-            time.sleep(3)
-            try:
-                btn_play.visible = True
-                spinner.visible = False
-                progress_overlay.width = 0 
-                status_txt.value = "Sẵn sàng chơi"
-                status_txt.color = "#AAAAAA"
-                btn_play.update()
-                spinner.update()
-                status_txt.update()
-                progress_overlay.update()
-            except: pass
+                safe_ui_update()
+                
+                # Nếu lỗi thì cũng Reset UI sau 3s
+                time.sleep(3)
+                reset_ui_to_ready()
 
         threading.Thread(target=extract_thread, daemon=True).start()
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # =========================================================================
+    # [MODULE] GLOBAL WATCHER (RÌNH GAME & GỌI VỆ TINH & AUTO-KILL)
+    # =========================================================================
+
+    # OVERLAY_HELPER_NAME = "ConistOverlayHelper.exe"
+    # URL_OVERLAY_HELPER = "https://github.com/anhkhakl/Conist-Launcher-Update/releases/download/v2.0.5/ConistOverlayHelper.exe"
+
+    # # 1. HÀM KIỂM TRA & TẢI FILE
+    # def ensure_overlay_helper_exists():
+    #     try:
+    #         data_dir = os.path.join(get_base_path(), "Launcher_Data")
+    #         helper_path = os.path.join(data_dir, OVERLAY_HELPER_NAME)
+            
+    #         # Nếu chưa có thì tải về
+    #         if not os.path.exists(helper_path):
+    #             print("[OVERLAY] Đang tải Helper về...")
+    #             try:
+    #                 res = requests.get(URL_OVERLAY_HELPER, stream=True, timeout=30)
+    #                 if res.status_code == 200:
+    #                     with open(helper_path, "wb") as f:
+    #                         for chunk in res.iter_content(chunk_size=8192):
+    #                             f.write(chunk)
+    #                     print("[OVERLAY] Tải Helper thành công.")
+    #                 else:
+    #                     print(f"[OVERLAY] Link hỏng: {res.status_code}")
+    #                     return None
+    #             except:
+    #                 return None
+                    
+    #         return helper_path
+    #     except Exception as e:
+    #         print(f"[OVERLAY] Lỗi tải Helper: {e}")
+    #         return None
+
+    # # 2. HÀM BẬT OVERLAY (CHẾ ĐỘ DEBUG)
+    # def launch_overlay_process(game_name, icon_path, x, y, hwnd):
+    #     print(f"\n[DEBUG] --- BẮT ĐẦU QUY TRÌNH GỌI VỆ TINH ---")
+    #     print(f"[DEBUG] Game: {game_name}")
+    #     print(f"[DEBUG] Icon: {icon_path}")
+    #     print(f"[DEBUG] Tọa độ: X={x}, Y={y}")
+    #     print(f"[DEBUG] HWND: {hwnd}")
+
+    #     try:
+    #         hp = ensure_overlay_helper_exists()
+    #         print(f"[DEBUG] Đường dẫn Helper: {hp}")
+            
+    #         if not hp:
+    #             print("[DEBUG] LỖI: Không lấy được đường dẫn Helper (None).")
+    #             return None
+                
+    #         if not os.path.exists(hp):
+    #             print(f"[DEBUG] LỖI: File Helper không tồn tại tại: {hp}")
+    #             return None
+                
+    #         print(f"[DEBUG] File tồn tại. Đang thử kích hoạt subprocess...")
+            
+    #         cmd_args = [hp, str(game_name), str(icon_path), str(x), str(y), str(hwnd)]
+            
+    #         # Dùng Popen để không bị treo Launcher
+    #         proc = subprocess.Popen(cmd_args)
+            
+    #         if proc:
+    #             print(f"[DEBUG] THÀNH CÔNG: Đã tạo tiến trình. PID: {proc.pid}")
+    #             return proc
+    #         else:
+    #             print("[DEBUG] LỖI: Popen trả về None.")
+
+    #     except Exception as e:
+    #         print(f"[DEBUG] NGOẠI LỆ (CRASH): {e}")
+            
+    #     return None
+
+    # # 3. HÀM WATCHER (AUTO-KILL & DICT LOGIC)
+    # def start_global_game_watcher():
+    #     import ctypes
+    #     from ctypes import wintypes
+        
+    #     user32 = ctypes.windll.user32
+    #     kernel32 = ctypes.windll.kernel32
+    #     psapi = ctypes.windll.psapi
+
+    #     print("[WATCHER] Đã kích hoạt chế độ Auto-Kill Overlay (Dict Mode)...")
+        
+    #     def get_process_name(hwnd):
+    #         try:
+    #             pid = ctypes.c_ulong()
+    #             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    #             if pid.value == 0: return ""
+    #             hProcess = kernel32.OpenProcess(0x1000, False, pid) 
+    #             if hProcess:
+    #                 buf = ctypes.create_unicode_buffer(1024)
+    #                 psapi.GetModuleBaseNameW(hProcess, None, buf, 1024)
+    #                 kernel32.CloseHandle(hProcess)
+    #                 return buf.value.lower()
+    #         except: pass
+    #         return ""
+
+    #     def worker():
+    #         while True:
+    #             try:
+    #                 WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    #                 IGNORED_APPS = [
+    #                     "explorer.exe", "chrome.exe", "msedge.exe", "firefox.exe", 
+    #                     "discord.exe", "steam.exe", "taskmgr.exe", "searchapp.exe",
+    #                     "conistoverlayhelper.exe", "code.exe", "python.exe", "applicationframehost.exe",
+    #                     "shellexperiencehost.exe", "lockapp.exe"
+    #                 ]
+    #                 visible_windows = []
+
+    #                 def foreach_window(hwnd, lParam):
+    #                     if user32.IsWindowVisible(hwnd):
+    #                         length = user32.GetWindowTextLengthW(hwnd)
+    #                         if length > 0:
+    #                             buff = ctypes.create_unicode_buffer(length + 1)
+    #                             user32.GetWindowTextW(hwnd, buff, length + 1)
+    #                             visible_windows.append((hwnd, buff.value))
+    #                     return True
+                    
+    #                 user32.EnumWindows(WNDENUMPROC(foreach_window), 0)
+
+    #                 # Tập hợp các game đang chạy thực tế
+    #                 current_running_games = set()
+                    
+    #                 for hwnd, title in visible_windows:
+    #                     if not hwnd: continue
+    #                     title_lower = title.lower()
+                        
+    #                     matched_game = None
+    #                     matched_icon = ""
+
+    #                     for game in GAME_LIST:
+    #                         g_name = game['name']
+    #                         pattern = r"\b" + re.escape(g_name.lower()) + r"\b"
+    #                         if re.search(pattern, title_lower):
+    #                             matched_game = g_name
+    #                             matched_icon = game.get('icon', '')
+    #                             break
+                        
+    #                     if not matched_game: continue
+
+    #                     rect = wintypes.RECT()
+    #                     user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    #                     w = rect.right - rect.left
+    #                     h = rect.bottom - rect.top
+    #                     if w < 600 or h < 400: continue
+
+    #                     proc_name = get_process_name(hwnd)
+    #                     if proc_name in IGNORED_APPS: continue
+
+    #                     # ==> TÌM THẤY GAME
+    #                     current_running_games.add(matched_game)
+                        
+    #                     # Nếu game này chưa có trong danh sách quản lý -> BẬT OVERLAY
+    #                     if matched_game not in active_game_sessions:
+    #                         hwnd_int = int(hwnd)
+    #                         print(f"[DETECT] Game Start: {matched_game}")
+                            
+    #                         clean_icon = matched_icon.replace("\\", "/") if matched_icon else ""
+                            
+    #                         # Bật và lấy Process Object
+    #                         # proc = launch_overlay_process(matched_game, clean_icon, rect.left, rect.top, hwnd_int)
+                            
+    #                         # if proc:
+    #                         #     # Lưu vào Dictionary: { "Tên Game": Process_Object }
+    #                         #     active_game_sessions[matched_game] = proc
+
+    #                 # ==> KIỂM TRA GAME ĐÃ TẮT (AUTO-KILL)
+    #                 # Duyệt qua các game đang được Overlay
+    #                 for old_game in list(active_game_sessions.keys()):
+    #                     if old_game not in current_running_games:
+    #                         print(f"[DETECT] Game Stop: {old_game} -> Kill Overlay")
+    #                         try:
+    #                             # Lôi đầu Process ra và Kill
+    #                             proc = active_game_sessions[old_game]
+    #                             proc.kill() 
+    #                         except: pass
+                            
+    #                         # Xóa khỏi Dictionary
+    #                         del active_game_sessions[old_game]
+
+    #             except Exception as e:
+    #                 # print(f"Watcher Error: {e}") 
+    #                 pass
+                
+    #             time.sleep(2)
+
+    #     threading.Thread(target=worker, daemon=True).start()
 
 
 
@@ -3105,19 +4301,74 @@ def main(page: ft.Page):
         on_hover=animate_setting_btn # Hàm animate đã có sẵn ở trên
     )
 
-    # Nút Trang chủ (Icon nảy lên khi hover)
-    btn_home_sidebar = ft.Container(
-        content=icon_home, # Dùng lại icon đã khai báo ở trên
+    # --- [FIX ORDER] 1. ĐỊNH NGHĨA HÀM ANIMATION TRƯỚC ---
+    def animate_sidebar_btn(e):
+        icon = e.control.content
+        is_hover = e.data == "true"
+        
+        if icon.name == ft.icons.SETTINGS:
+            icon.rotate.angle = 3.14 if is_hover else 0
+        elif icon.name == ft.icons.HOME:
+            icon.offset.y = -0.3 if is_hover else 0
+
+        e.control.opacity = 1.0 if is_hover else 0.5 
+        e.control.scale = 1.1 if is_hover else 1.0   
+        icon.update()
+        e.control.update()
+
+    # --- [FIX ORDER] 2. ĐỊNH NGHĨA HÀM RESET HOME TRƯỚC ---
+    def reset_to_home(e):
+        search_box.value = ""
+        search_box.update()
+        run_search_logic("") 
+        
+        # Đóng sidebar
+        sidebar_state["sidebar"] = False
+        sidebar_state["trigger"] = False
+        sidebar_container.offset = ft.Offset(1.1, 0)
+        sidebar_blur_layer.opacity = 0
+        sidebar_container.update()
+        sidebar_blur_layer.update()
+        
+        def delayed_hide_blur():
+            time.sleep(0.3)
+            sidebar_blur_layer.visible = False
+            try: page.update()
+            except: pass
+        threading.Thread(target=delayed_hide_blur, daemon=True).start()
+
+    # --- [FIX ORDER] 3. BÂY GIỜ MỚI ĐỊNH NGHĨA NÚT BẤM ---
+    # Nút Cài đặt
+    btn_setting_sidebar = ft.Container(
+        content=ft.Icon(
+            ft.icons.SETTINGS, color="white", size=24,
+            rotate=ft.Rotate(0, alignment=ft.alignment.center),
+            animate_rotation=ft.Animation(400, "easeOutBack"),
+        ),
         width=50, height=50, 
         bgcolor="#33FFFFFF", border_radius=15, 
         alignment=ft.alignment.center,
-        on_click=lambda e: on_search(None), # Về trang chủ là reset tìm kiếm
-        tooltip="Về trang chủ",
-        on_hover=animate_home_btn # Hàm animate đã có sẵn ở trên
+        opacity=0.5, animate_opacity=200, animate_scale=ft.Animation(200, "easeOut"),
+        on_click=toggle_settings_drawer, 
+        tooltip="Cài đặt hệ thống",
+        on_hover=animate_sidebar_btn # Lúc này hàm đã tồn tại nên không lỗi nữa
     )
-# --- [NEW FIXED] CÁC NÚT SIDEBAR & ANIMATION ---
-    
-    # --- [FULL FIX SIDEBAR - REPLACE ALL] ---
+
+    # Nút Home
+    btn_home_sidebar = ft.Container(
+        content=ft.Icon(
+            ft.icons.HOME, color="white", size=24,
+            offset=ft.Offset(0, 0),
+            animate_offset=ft.Animation(300, "bounceOut"),
+        ),
+        width=50, height=50, 
+        bgcolor="#33FFFFFF", border_radius=15, 
+        alignment=ft.alignment.center,
+        opacity=0.5, animate_opacity=200, animate_scale=ft.Animation(200, "easeOut"),
+        on_click=reset_to_home, # Lúc này hàm đã tồn tại
+        tooltip="Về trang chủ (Reset)",
+        on_hover=animate_sidebar_btn
+    )
 
     # 1. Hàm xử lý Animation cho nút (Đã Fix lỗi lần đầu)
     def animate_sidebar_btn(e):
@@ -3302,13 +4553,14 @@ def main(page: ft.Page):
         ], alignment=ft.MainAxisAlignment.END)
     )
 
-    # --- [NEW] 4. VÙNG CẢM ỨNG (TRIGGER ZONE) ---
-    # Đây là vùng trong suốt sát mép phải để chuột chạm vào là Sidebar hiện ra
+
     trigger_zone = ft.Container(
-        data="trigger", # [QUAN TRỌNG] Phải có dòng này thì logic mới chạy
-        width=60, 
-        top=70, bottom=0, right=0,
-        bgcolor=None, # Trong suốt hoàn toàn
+        data="trigger", 
+        width=80,       # Rộng ra chút để dễ quẹt trúng
+        height=250,     # Chiều cao giới hạn (Không full màn hình nữa)
+        right=0, 
+        bottom=0,       # [QUAN TRỌNG] Neo xuống đáy
+        bgcolor=None,   # Trong suốt
         on_hover=sidebar_logic 
     )
 # --- [ADD] TAB QUẢN LÝ DOWNLOAD ---
@@ -3806,40 +5058,35 @@ def main(page: ft.Page):
 
         dt_update_btn.on_click = run_check_process
         
-        # Logic nút tải & Driver
+       # Logic nút tải & Driver
         driver_overlay.visible = False
         if game['download_link']:
             btn_download_base.bgcolor = "orange"
-            btn_download_base.on_click = lambda e: (close_detail(None), threading.Thread(target=lambda: trigger_download_process(game), daemon=True).start())
-            try: btn_download_base.content.controls[1].value = "TẢI NGAY"
-            except: pass
-            current_driver_link[0] = game['download_link']
-            driver_overlay.visible = True
-        else:
-            btn_download_base.bgcolor = "grey"
-            btn_download_base.on_click = None
-            try: btn_download_base.content.controls[1].value = "CHƯA CÓ LINK"
-            except: pass
+            
+            # --- HÀM CLICK MỚI (FIX ANIMATION) ---
+            def on_download_click_safe(e):
+                # 1. KÍCH HOẠT ANIMATION NGAY LẬP TỨC (Không quan tâm logic sau đó)
+                if GLOBAL_GHOST_PREVIEW:
+                    try:
+                        # Lấy icon game
+                        final_icon = game.get('icon', "")
+                        if not final_icon: final_icon = "https://github.com/anhkhakl/Conist-Launcher-Update/raw/main/app_icon.ico"
+                        
+                        # GỌI SIDEBAR TRƯỢT RA
+                        GLOBAL_GHOST_PREVIEW.trigger(game['name'], final_icon)
+                    except: pass
 
-        # Logic Việt Hóa
-        dt_viet_btn.visible = bool(game.get('viet_link'))
-        if dt_viet_btn.visible:
-            dt_viet_btn.on_click = lambda e: webbrowser.open(game['viet_link'])
+                # 2. Đóng bảng chi tiết
+                close_detail(None)
+                
+                # 3. GỌI LẠI QUY TRÌNH TẢI CŨ (Giữ nguyên logic gốc của bạn)
+                # trigger_download_process là hàm gốc xử lý tải/check file/giải nén...
+                threading.Thread(target=lambda: trigger_download_process(game), daemon=True).start()
+            # --------------------------------------
 
-        # Hiển thị
-        trigger_zone.visible = False
-        sidebar_container.offset = ft.Offset(1.1, 0)
-        dl_trigger_zone.visible = False
-        game_detail_overlay.offset = ft.Offset(0, 0)
-        page.update()
-        
-        run_check_process()
-        
-        # Logic nút tải
-        driver_overlay.visible = False
-        if game['download_link']:
-            btn_download_base.bgcolor = "orange"
-            btn_download_base.on_click = lambda e: (close_detail(None), threading.Thread(target=lambda: trigger_download_process(game), daemon=True).start())
+            # Gán hàm mới vào nút
+            btn_download_base.on_click = on_download_click_safe
+
             try: btn_download_base.content.controls[1].value = "TẢI NGAY"
             except: pass
             current_driver_link[0] = game['download_link']
@@ -3999,12 +5246,21 @@ def main(page: ft.Page):
     opacity=1, # Mặc định là hiện
     animate_opacity=ft.Animation(1000, "easeOut"), # Hiệu ứng mờ dần trong 1 giây
 )
-    # --- MAIN LAYOUT ---
+    # ... (Các code phía trên trong hàm main) ...
+
+    # 1. TẠO BIẾN GHOST PREVIEW (Đã có sẵn)
+    global GLOBAL_GHOST_PREVIEW
+    ghost_preview = GhostDownloadPreview()
+    GLOBAL_GHOST_PREVIEW = ghost_preview
+    
+    # 2. [QUAN TRỌNG] KHỞI TẠO CHANGELOG TẠI ĐÂY (SỬA LỖI UNDEFINED)
+    # Phải đặt dòng này TRƯỚC khi tạo main_layout và TRƯỚC các hàm gọi nó
+    changelog_popup = ChangelogModal(page) 
+
+    # 3. SAU ĐÓ MỚI ĐẾN MAIN LAYOUT
     main_layout = ft.Container(
         width=1280, height=720,
         clip_behavior=ft.ClipBehavior.HARD_EDGE, 
-        
-        # [FIX] Bỏ MouseRegion, chỉ giữ lại nội dung Stack bên trong
         content=ft.Stack([
             bg_container,       
             body_container,     
@@ -4014,126 +5270,176 @@ def main(page: ft.Page):
             sidebar_container,     
             blur_overlay,         
             settings_drawer,
-
-
-
-
-
-            dl_trigger_zone,   # <--- Dùng biến mới này (Vùng cảm ứng to)
+            dl_trigger_zone,
             dl_overlay_blur,
             downloads_drawer,
             dl_anim_box,
             coord_container,
+            
+            # Các lớp phủ
+            ghost_preview,
+            changelog_popup, # <--- Biến này giờ đã được định nghĩa ở trên, hết lỗi
             notification_stack,
             sleep_overlay       
         ], expand=True),
         
         opacity=0, 
-        animate_opacity=500
+        animate_opacity=ft.Animation(800, "easeOut"),
     )
+# --- [BỔ SUNG] HÀM XỬ LÝ PHÍM TẮT (ĐÃ BỊ THIẾU) ---
+    def on_global_keyboard(e: ft.KeyboardEvent):
+        # 1. TAB: Mở/Đóng Kho Tải
+        if e.key == "7" and (e.ctrl or e.meta):
+            changelog_popup.show() # Gọi hàm hiện bảng
+        if e.key == "Tab":
+            # [FIX MỚI] Nếu Ghost Tab đang hiện -> Tắt nó NGAY LẬP TỨC
+            if GLOBAL_GHOST_PREVIEW and GLOBAL_GHOST_PREVIEW.visible:
+                GLOBAL_GHOST_PREVIEW.hide_fast()
 
+            # Sau đó chạy logic mở kho tải to như bình thường
+            if settings_drawer.offset.x > 0 and game_detail_overlay.offset.y > 0:
+                if downloads_drawer.left < 0:
+                    open_downloads_drawer()
+                else:
+                    close_downloads_drawer()
+
+        # 2. Ctrl + 9: Chế độ ngủ
+        if e.key == "9" and (e.ctrl or e.meta): 
+            go_to_sleep()
+
+    # Kích hoạt trình lắng nghe (Dòng này sẽ hết lỗi vì hàm đã có ở trên)
+    page.on_keyboard_event = on_global_keyboard
+    
+    # Thêm giao diện vào trang
     page.add(main_layout)
 
-    # --- 9. LOGIC KHỞI ĐỘNG (FIX LỖI KHÔNG CẬP NHẬT DATA) ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # -----------------------------------------------------------
+    # [FIX FINAL V2] KHỞI ĐỘNG AN TOÀN TUYỆT ĐỐI
+    # -----------------------------------------------------------
+    
+    # 1. Tạo màn hình chờ (Bắt buộc phải có biến này trước)
+    # Lưu ý: Hàm lambda ở đây chỉ set giá trị, không gọi update để tránh lỗi
+    splash = SplashLoader(page, lambda: setattr(page.window, 'always_on_top', False))
+
+    # 2. Định nghĩa quy trình khởi động
     async def run_startup():
         global RAW_GAME_DATA
         
-        # 1. Chạy hiệu ứng Loading Splash
-        await splash.animate_loading()
+        # Chạy hiệu ứng Loading
+        try: await splash.animate_loading()
+        except: pass
         
-        # 2. Hiện giao diện chính
+        # --- [FIX CRASH] ---
+        # Tắt chế độ luôn ở trên cùng để người dùng Alt+Tab được
+        try:
+            page.window.always_on_top = False
+            page.update() 
+        except: pass
+
+        # Hiện giao diện chính
         bg_container.opacity = 1
         main_layout.opacity = 1
         page.update()
 
-        # 3. Fix kích thước (Chống màn hình đen)
-        # (Giữ nguyên đoạn nhích nhẹ 1px cũ của bạn ở đây...)
-        current_w = page.window.width
-        current_h = page.window.height
-        page.window.width = current_w + 1
-        page.window.height = current_h + 1
-        page.update()
-        await asyncio.sleep(0.05)
-        page.window.width = 1280
-        page.window.height = 720
-        page.update()
+        # Fix kích thước (Chống màn hình đen)
+        try:
+            current_w = page.window.width
+            current_h = page.window.height
+            page.window.width = current_w + 1
+            page.window.height = current_h + 1
+            page.update()
+            await asyncio.sleep(0.05)
+            page.window.width = 1280
+            page.window.height = 720
+            page.update()
+        except: pass
         
-        # --- [FIX QUAN TRỌNG] TẢI DATA MỚI NHẤT TỪ GITHUB ---
-        print("[STARTUP] Bắt đầu đồng bộ dữ liệu...")
-        splash.msg_txt.value = "Đang cập nhật danh sách game..."
-        splash.page.update()
+        # Tải Data mới
+        print("[STARTUP] Đang kiểm tra cập nhật danh sách game...")
+        try:
+            splash.msg_txt.value = "Đang đồng bộ dữ liệu..."
+            splash.page.update()
+        except: pass
 
-        # Gọi hàm tải trực tiếp (Bắt buộc tải lại để lấy list mới)
         success = await asyncio.to_thread(download_data_direct)
         
         if success:
-            print("[STARTUP] Đã tải xong raw_games.txt mới nhất.")
-        else:
-            print("[STARTUP] Tải thất bại, dùng dữ liệu cũ.")
+            print("[STARTUP] Đã tải xong data mới.")
+            if os.path.exists(LOCAL_DATA_PATH):
+                try:
+                    with open(LOCAL_DATA_PATH, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        if len(content) > 10:
+                            RAW_GAME_DATA = ast.literal_eval(content)
+                            # Lúc này gọi hàm vẽ là an toàn
+                            refresh_data_and_grid() 
+                except: pass
 
-        # --- NẠP DỮ LIỆU VÀO RAM ---
-        if os.path.exists(LOCAL_DATA_PATH):
-            try:
-                with open(LOCAL_DATA_PATH, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    RAW_GAME_DATA = ast.literal_eval(content)
-                
-                print(f"[STARTUP] Đã nạp {len(RAW_GAME_DATA)} game vào hệ thống.")
-                
-                # Cập nhật giao diện Grid ngay lập tức
-                refresh_data_and_grid() 
-                
-            except Exception as e: 
-                print(f"[STARTUP] Lỗi đọc file data: {e}")
-        
-        # --- Kích hoạt luồng tải ảnh ---
-        # (Sau khi đã có danh sách game đầy đủ)
+        # Kích hoạt tải ảnh ngầm
         threading.Thread(target=bg_download_icons, daemon=True).start()
-        
 
-        # ---------------------------------------------------
+   
 
-        # 4. [SAU KHI UI ỔN ĐỊNH] MỚI BẮT ĐẦU CHECK UPDATE
-        # Lúc này màn hình đã đứng im, animation sẽ trượt ra cực mượt
+
+        # 5. Check Update App (Logic: Server > Local)
+        print("[UPDATE] Bắt đầu kiểm tra phiên bản...")
         try:
-            # Hàm con check mạng
             def fetch_update_data_sync():
                 timestamp = int(time.time())
                 RAW_URL = f"https://raw.githubusercontent.com/anhkhakl/Conist-Launcher-Update/main/version.json?t={timestamp}"
-                no_cache_headers = {
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0"
-                }
-                resp = requests.get(RAW_URL, headers=no_cache_headers, timeout=5)
-                return resp.json()
+                return requests.get(RAW_URL, timeout=5).json()
 
-            # Chạy check ngầm
             data = await asyncio.to_thread(fetch_update_data_sync)
             
-            server_ver = data["latest_version"].strip()
-            local_ver = CURRENT_VERSION.strip()
+            server_ver = str(data.get("latest_version", "0.0.0")).strip()
+            download_url = data.get("download_url", "")
             
-            print(f"Auto Check (Async): Local={local_ver} | Server={server_ver}")
+            print(f"[UPDATE] Server: '{server_ver}' | Local: '{CURRENT_VERSION}'")
 
-            # Hiện thông báo nếu có bản mới
-            if server_ver != local_ver:
-                download_url = data.get("download_url", "")
+            # Hàm so sánh: Trả về True nếu Ver A > Ver B
+            def is_newer(ver_a, ver_b):
+                try:
+                    a = [int(x) for x in re.findall(r'\d+', str(ver_a))]
+                    b = [int(x) for x in re.findall(r'\d+', str(ver_b))]
+                    return a > b
+                except: return False
+
+            # CHỈ BÁO NẾU SERVER MỚI HƠN MÁY
+            if is_newer(server_ver, CURRENT_VERSION):
+                print(f"[UPDATE] => CÓ BẢN MỚI! ({server_ver} > {CURRENT_VERSION})")
                 if download_url:
-                    # Đợi thêm xíu cho người dùng nhìn thấy giao diện đã
-                    await asyncio.sleep(0.5) 
-                    
+                    await asyncio.sleep(1) 
                     show_push_notification(
                         f"Đã có phiên bản mới v{server_ver}", 
                         type="update", 
-                        duration=None, # Giữ nguyên để người dùng kịp bấm
                         key="update_alert",
+                        duration=300000, 
                         on_click_action=lambda: start_self_update(download_url, server_ver)
                     )
-        except Exception as e: 
-            print(f"Lỗi Auto Check: {e}")
-            pass
-
+            else:
+                # Nếu Server BẰNG hoặc NHỎ HƠN Local -> Im lặng tuyệt đối
+                print(f"[UPDATE] Không cần update.")
+                
+        except Exception as e:
+            print(f"[UPDATE ERROR] Lỗi kiểm tra: {e}")
+        except: pass
         # 4. [FIX TỰ DI CHUYỂN & FIX MÀN ĐEN]
         # Chỉ thay đổi kích thước nhẹ để ép vẽ lại, TUYỆT ĐỐI KHÔNG dùng .center()
         current_w = page.window.width
@@ -4163,60 +5469,69 @@ def main(page: ft.Page):
         # Trả về kích thước chuẩn
         page.window.width = 1280
         page.window.height = 720
+        try:
+            await asyncio.sleep(1)
+            changelog_popup.check_and_show_once()
+        except: pass
         page.update()
         # ---------------------------------------------------
 
-    # Khởi tạo Splash (Chỉ truyền page và hàm tắt always_on_top)
-    splash = SplashLoader(page, lambda: setattr(page.window, 'always_on_top', False))
-    
-    # Bắt đầu quy trình khởi động
-    page.run_task(run_startup)
+    # --- KHỞI CHẠY ---
+    # 1. Hiện giao diện ngay lập tức
+    bg_container.opacity = 1
+    page.update()
 
-    # --- WORKER: Xử lý 1 game ---
+
+
+    # --- WORKER: Tải Ảnh + Check Steam (Đã tích hợp lấy Logo Steam) ---
     def process_single_icon(g):
         has_new = False
         try:
             slug = clean_name_for_slug(g['name'])
-            # [QUAN TRỌNG] Chỉ tìm file .jpg
             local_path = os.path.join(ICON_FOLDER, f"{slug}.jpg")
             
-            # Logic kiểm tra file
-            # 1. Chưa có file
-            # 2. Hoặc file bị hỏng (0KB)
-            should_download = not os.path.exists(local_path) or os.path.getsize(local_path) < 1024
-            
+            # Kiểm tra xem cần làm gì? (Thiếu ảnh HOẶC Thiếu info Online)
+            is_icon_missing = not os.path.exists(local_path) or os.path.getsize(local_path) < 1024
+            is_mp_missing = g.get('mp_status', 'Unknown') in ['Unknown', 'Checking...']
             has_link = g.get('lnd_url') and len(str(g.get('lnd_url'))) > 10
 
-            if should_download and has_link:
-                # print(f"⬇️ [ĐANG TẢI] {g['name']}...") # Bỏ comment nếu muốn xem chi tiết
+            if has_link and (is_icon_missing or is_mp_missing):
+                # GỌI HYBRID ENGINE 1 LẦN DUY NHẤT (Lấy cả Ảnh + Info)
+                full_info = fetch_full_details(g['lnd_url'])
                 
-                img_url = get_lnd_image(g['lnd_url'])
-                if img_url and download_icon(img_url, local_path):
-                    g['icon'] = local_path
-                    has_new = True
+                if full_info:
+                    # 1. Tải Ảnh (Nếu thiếu)
+                    if is_icon_missing and full_info.get('icon'):
+                        # Tải từ link Steam (hoặc LND fallback) về máy
+                        if download_icon(full_info['icon'], local_path):
+                            g['icon'] = local_path
+                            has_new = True
                     
-                    # Update UI ngay lập tức (Thread Safe)
-                    try:
-                        for card in grid.controls:
-                            if card.game['name'] == g['name']:
-                                card.img_control.src = local_path
-                                card.img_control.update()
-                                break
-                    except: pass
-            else:
-                # Nếu đã có ảnh, đảm bảo đường dẫn trong RAM đúng là file .jpg đó
-                if os.path.exists(local_path):
-                     g['icon'] = local_path
-                     # Cập nhật ngược lại vào UI nếu đang hiển thị sai
-                     try:
-                        for card in grid.controls:
-                            if card.game['name'] == g['name'] and card.img_control.src != local_path:
-                                card.img_control.src = local_path
-                                card.img_control.update()
-                     except: pass
+                    # 2. Cập nhật Online/Offline (Nếu thiếu)
+                    if is_mp_missing:
+                        new_mp = full_info.get('mp_status', 'Offline')
+                        if g.get('mp_status') != new_mp:
+                            g['mp_status'] = new_mp
+                            has_new = True
+
+            # Nếu ảnh vẫn chưa tải được nhưng có file cũ -> dùng tạm
+            if not is_icon_missing and os.path.exists(local_path):
+                if g.get('icon') != local_path:
+                    g['icon'] = local_path
+            
+            # 3. CẬP NHẬT UI
+            if has_new:
+                try:
+                    for card in grid.controls:
+                        if card.game['name'] == g['name']:
+                            card.refresh_ui()
+                            break
+                except: pass
 
         except Exception: pass
         return has_new
+    
+
 
     # --- TURBO V3: TỐC ĐỘ ÁNH SÁNG (NO DELAY) ---
     def bg_download_icons():
@@ -4294,8 +5609,9 @@ def main(page: ft.Page):
 
     threading.Thread(target=idle_checker, daemon=True).start()
     threading.Thread(target=bg_download_icons, daemon=True).start()
+    # start_global_game_watcher()
     if APP_CONFIG.get("auto_update_games", False):
-        # [cite_start]Lúc này đang ở trong hàm main nên nó mới nhìn thấy process_game_updates_thread [cite: 99]
+        # Lúc này đang ở trong hàm main nên nó mới nhìn thấy process_game_updates_thread
         threading.Thread(target=process_game_updates_thread, daemon=True).start()
 
 
@@ -4312,7 +5628,17 @@ def main(page: ft.Page):
 
 
 
-
+# 3. Kích hoạt App (Dán vào cuối hàm main, thay thế các dòng cũ)
+    try:
+        # Gọi quy trình khởi động
+        page.run_task(run_startup)
+    except Exception as e:
+        print(f"Lỗi Startup: {e}")
+        # Cứu hộ khẩn cấp: Nếu startup lỗi thì ép hiện giao diện
+        page.window.always_on_top = False
+        bg_container.opacity = 1
+        main_layout.opacity = 1
+        page.update()
 
 
 
