@@ -725,7 +725,7 @@ class ChangelogModal(ft.Container):
 
         threading.Thread(target=spin_out, daemon=True).start()
 
-    # LOGIC KIỂM TRA (Server > Local)
+    # LOGIC KIỂM TRA (DỄ TÍNH: Cứ khác version là hiện)
     def check_and_show_once(self):
         try:
             flag_file = os.path.join(get_base_path(), "Launcher_Data", "last_opened_version.txt")
@@ -733,19 +733,20 @@ class ChangelogModal(ft.Container):
             if os.path.exists(flag_file):
                 with open(flag_file, "r") as f: last_ver = f.read().strip()
             
+            # 1. Nếu chưa có file (lần đầu chạy) -> Hiện luôn để chào mừng
             if not last_ver:
+                self.show()
                 with open(flag_file, "w") as f: f.write(CURRENT_VERSION)
                 return
 
+            # 2. Nếu phiên bản lưu trong file KHÁC phiên bản hiện tại -> Hiện luôn
+            # (Bất kể nâng cấp, hạ cấp hay cài đè, miễn khác là hiện)
             if last_ver != CURRENT_VERSION:
-                try:
-                    cur_nums = [int(x) for x in re.findall(r'\d+', CURRENT_VERSION)]
-                    old_nums = [int(x) for x in re.findall(r'\d+', last_ver)]
-                    if cur_nums > old_nums:
-                        self.show()
-                except: self.show()
-                
+                self.show()
                 with open(flag_file, "w") as f: f.write(CURRENT_VERSION)
+            
+            # Nếu trùng version thì thôi, không làm gì cả.
+                
         except Exception: pass
 
 
@@ -883,7 +884,7 @@ class GhostDownloadPreview(ft.Container):
 
 
 
-CURRENT_VERSION = "2.0.5"
+CURRENT_VERSION = "2.0.3"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
@@ -1367,7 +1368,7 @@ def fetch_lnd_version(lnd_url):
     return "Error"
 
 def download_icon(img_url, save_path):
-    """Tải icon siêu tốc dùng Session"""
+    """Tải icon và CẮT VUÔNG (Center Crop) để không bị méo"""
     for attempt in range(3):
         try:
             if save_path.endswith(".png"): save_path = save_path.replace(".png", ".jpg")
@@ -1379,12 +1380,28 @@ def download_icon(img_url, save_path):
                 img = Image.open(res.raw)
                 if img.mode in ("RGBA", "P"): img = img.convert("RGB")
                 
-                # Resize nhanh
+                # --- [FIX QUAN TRỌNG] THUẬT TOÁN CẮT ẢNH VUÔNG ---
+                # Thay vì ép (resize) gây méo, ta sẽ cắt lấy phần giữa (Crop)
+                width, height = img.size
+                new_edge = min(width, height) # Lấy cạnh ngắn nhất làm chuẩn
+                
+                # Tính toán tọa độ trung tâm để cắt đúng giữa
+                left = (width - new_edge) / 2
+                top = (height - new_edge) / 2
+                right = (width + new_edge) / 2
+                bottom = (height + new_edge) / 2
+                
+                # Cắt ảnh trước
+                img = img.crop((left, top, right, bottom))
+                
+                # Sau đó mới thu nhỏ về 150x150
                 img = img.resize((150, 150), Image.Resampling.LANCZOS)
-                img.save(save_path, "JPEG", quality=85)
+                
+                img.save(save_path, "JPEG", quality=90)
                 return True
-        except:
-            time.sleep(0.5) # Chờ xíu rồi thử lại
+        except Exception as e:
+            # print(f"Lỗi tải ảnh: {e}")
+            time.sleep(0.5)
     return False
 # --- HÀM CHECK STEAM (TỐC ĐỘ CAO) ---
 def check_steam_online_status(game_name):
