@@ -8,6 +8,7 @@ import json
 import re
 import threading
 import time
+import stat
 import webbrowser
 import winreg as reg
 import winsound
@@ -30,7 +31,7 @@ try:
 except ImportError:
     HAS_TRAY_LIB = False
     print("Warning: Chưa cài pystray -> Tắt tính năng chạy ngầm.")
-
+ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
 
 
 
@@ -56,40 +57,47 @@ def get_real_steam_url(lnd_soup):
     return None
 
 
-# --- [FIX MEI ERROR - SAFE MODE] DỌN DẸP THƯ MỤC TẠM (CHẠY NGẦM) ---
+# --- [FIX MEI ERROR FINAL] DỌN DẸP THƯ MỤC TẠM (LOGIC CHUẨN) ---
 def cleanup_mei_folders_safe():
+    def remove_readonly(func, path, excinfo):
+        """Hàm trợ giúp: Tự động gỡ bỏ thuộc tính Read-only nếu xóa lỗi"""
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except: pass
+
     def worker():
         try:
-            # 1. Chỉ chạy khi là file EXE (Để không ảnh hưởng lúc Dev trên VS Code)
-            if not getattr(sys, 'frozen', False): 
-                return
+            # 1. Chỉ chạy khi là file EXE
+            if not getattr(sys, 'frozen', False): return
 
             base_temp = os.environ.get('TEMP')
             if not base_temp: return
             
-            # Lấy tên thư mục tạm của phiên bản ĐANG CHẠY (để không lỡ tay xóa nhầm)
+            # Lấy tên thư mục hiện tại (để BẢO VỆ, không xóa nhầm)
             current_mei = os.path.basename(sys._MEIPASS) if hasattr(sys, '_MEIPASS') else ""
             
-            # Ngủ 1 giây để hệ thống ổn định trước khi quét rác
+            # Ngủ 1s để đảm bảo tiến trình cũ đã nhả file hoàn toàn
             time.sleep(1)
 
-            # Quét và xóa các thư mục _MEI cũ
             if os.path.exists(base_temp):
                 for item in os.listdir(base_temp):
-                    # Chỉ xóa thư mục _MEI và KHÁC thư mục hiện tại
+                    # Logic: Tìm thư mục _MEI cũ (Không phải cái đang chạy)
                     if item.startswith("_MEI") and item != current_mei:
                         full_path = os.path.join(base_temp, item)
                         try:
-                            # Xóa mạnh tay (ignore_errors=True để không crash nếu file đang bị khóa)
-                            shutil.rmtree(full_path, ignore_errors=True)
+                            # Xóa mạnh tay, dùng onexc để xử lý file lì lợm
+                            shutil.rmtree(full_path, ignore_errors=False, onexc=remove_readonly)
+                            print(f"[CLEANUP] Đã dọn dẹp rác: {item}")
                         except: pass
         except: pass
 
-    # Chạy trên luồng phụ để không bao giờ làm treo App lúc khởi động
+    # Chạy luồng phụ để không ảnh hưởng tốc độ khởi động
     threading.Thread(target=worker, daemon=True).start()
 
-# Gọi hàm ngay lập tức
+# Gọi ngay lập tức
 cleanup_mei_folders_safe()
+# -----------------------------------------------------------------------
 
 
 
@@ -1945,48 +1953,43 @@ def main(page: ft.Page):
 
 
 
-    # --- [FIX FINAL V3] TẮT APP MƯỢT NHƯ GAME (GPU RENDER) ---
+    # --- [FIX FINAL V5] TẮT APP "HỦY DIỆT" (TERMINATOR MODE) ---
     def on_window_event(e):
         if e.data == "close":
+            # 1. Ẩn giao diện ngay lập tức cho mượt
             try:
-                # 1. KÍCH HOẠT HIỆU ỨNG BIẾN MẤT (FADE OUT NỘI DUNG)
-                # Dùng GPU của Flet để làm mờ nội dung, mượt hơn làm mờ cửa sổ Windows gấp 10 lần
-                main_layout.animate_opacity = ft.Animation(200, "easeIn") # 200ms = 0.2 giây
-                main_layout.opacity = 0
-                main_layout.update()
-                
-                # 2. Đợi đúng 0.2s cho hiệu ứng chạy xong
-                time.sleep(0.2)
+                page.window.visible = False
+                page.update()
             except: pass
 
-            # 3. ẨN CỬA SỔ NGAY LẬP TỨC
-            page.window.visible = False
-            page.update()
-
-            # 4. DỌN DẸP CHIẾN TRƯỜNG (CHẠY NGẦM)
-            def background_cleanup():
+            def nuclear_exit():
+                # --- LỆNH HỦY DIỆT (TERMINATE PROCESS) ---
+                # Đây là lệnh cấp cao nhất của Windows. Nó giết tiến trình ngay tại chỗ.
+                # Bootloader của PyInstaller sẽ bị tắt ngóm trước khi kịp báo lỗi _MEI.
                 try:
-                    # Hủy download
-                    if ACTIVE_DOWNLOADS:
-                        for name, state in list(ACTIVE_DOWNLOADS.items()):
-                            state['cancelled'] = True
-                        time.sleep(0.5) 
-
-                    # Xử lý Tray Icon hoặc Thoát hẳn
-                    run_bg = APP_CONFIG.get("run_in_background", False)
-                    if run_bg and HAS_TRAY_LIB:
-                        # [QUAN TRỌNG] Reset lại độ rõ để lần sau mở lên từ Tray thì thấy được
-                        # (Vì App chỉ ẩn đi chứ không tắt hẳn)
-                        main_layout.opacity = 1
-                        page.update()
-                        threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
-                    else:
-                        page.window.destroy()
-                        os._exit(0) # Kill sạch sành sanh
-                except: 
+                    # [TỐI ƯU HƠN CHATGPT] Dùng GetCurrentProcess nhanh và chuẩn hơn OpenProcess
+                    handle = ctypes.windll.kernel32.GetCurrentProcess()
+                    ctypes.windll.kernel32.TerminateProcess(handle, 0)
+                except:
+                    # Fallback nếu xui xẻo (Hiếm khi vào đây)
+                    import os
                     os._exit(0)
 
-            threading.Thread(target=background_cleanup, daemon=True).start()
+            # 2. Logic chạy ngầm
+            try:
+                run_bg = APP_CONFIG.get("run_in_background", False)
+                # Nếu đang Dev (chạy bằng python.exe) thì KHÔNG chạy ngầm để dễ tắt
+                is_dev = not getattr(sys, 'frozen', False)
+
+                if run_bg and HAS_TRAY_LIB and not is_dev:
+                    main_layout.opacity = 1
+                    page.update()
+                    threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
+                else:
+                    # Nếu không chạy ngầm -> KÍCH HOẠT HỦY DIỆT
+                    nuclear_exit()
+            except:
+                nuclear_exit()
 
     page.window.prevent_close = True 
     page.window.on_event = on_window_event
@@ -3228,7 +3231,7 @@ def main(page: ft.Page):
                 btn_play.visible = True; spinner.visible = False
                 btn_play.update(); spinner.update()
 
-            # --- HÀM CON 3: LUỒNG CHÍNH (FIX LỖI STUCK LOADING) ---
+        # --- HÀM CON 3: LUỒNG CHÍNH (FIX LỖI STUCK LOADING + MEI ERROR) ---
         def extract_thread(is_download_finished=False):
             # Helper 1: Update UI an toàn
             def safe_ui_update():
@@ -3245,7 +3248,7 @@ def main(page: ft.Page):
                     if btn_play.page:
                         btn_play.visible = True
                         btn_play.icon = ft.icons.PLAY_ARROW_ROUNDED
-                        btn_play.text = "" # Nút Play chỉ cần icon
+                        btn_play.text = "" 
                         btn_play.update()
                     
                     if spinner.page: 
@@ -3281,9 +3284,9 @@ def main(page: ft.Page):
                         GLOBAL_GHOST_PREVIEW.trigger(game_name, final_icon)
                     except: pass
 
-            target_exe = None # Khởi tạo biến
+            target_exe = None 
 
-            try:
+            try: # <--- TRY LỚN (Bắt lỗi toàn bộ quá trình)
                 # A. GIẢI NÉN
                 if os.path.exists(archive_file):
                     status_txt.value = "Đang giải nén..."
@@ -3354,60 +3357,54 @@ def main(page: ft.Page):
                 if candidates:
                     candidates.sort(key=lambda x: x[0], reverse=True)
                     target_exe = candidates[0][1]
+                    
+                    # [QUAN TRỌNG] Xác định thư mục làm việc
+                    working_dir = os.path.dirname(target_exe)
 
-                # C. QUYẾT ĐỊNH
-                if target_exe:
-                    # ==> CASE 1: CHẠY GAME
+                                        # C. CHẠY GAME (FIX TRIỆT ĐỂ LỖI _MEI)
                     status_txt.value = "Đang khởi động..."
                     status_txt.color = "green"
                     safe_ui_update()
                     
-                    working_dir = os.path.dirname(target_exe)
                     apply_lnd_vaccine(working_dir)
 
                     try:
-                        subprocess.Popen([target_exe], cwd=working_dir)
-                        # clean_icon = icon_src.replace("\\", "/") if icon_src else ""
-                        #                         # [FIX] Gọi Overlay và lưu vào danh sách để có thể Auto-Kill khi tắt game
-                        # proc = launch_overlay_process(game_name, clean_icon, 0, 0, 0)
-                        # if proc:
-                        #     active_game_sessions[game_name] = proc
-                    except OSError as err:
-                        if err.winerror == 740:
-                            apply_lnd_vaccine(working_dir)
-                            ctypes.windll.shell32.ShellExecuteW(None, "runas", target_exe, None, working_dir, 1)
-                                                    # [FIX] Cập nhật Overlay cho trường hợp chạy quyền Admin
-                                                # [FIX] Gọi Overlay bằng hàm mới và lưu vào danh sách để có thể Auto-Kill khi tắt game
-                        # clean_icon = icon_src.replace("\\", "/") if icon_src else ""
-                        # proc = launch_overlay_process(game_name, clean_icon, 0, 0, 0)
-                        # if proc:
-                        #     active_game_sessions[game_name] = proc
-                        # if proc:
-                        #     active_game_sessions[game_name] = proc
-                        else: raise err
+                        ctypes.windll.shell32.ShellExecuteW(
+                            None, "open", target_exe, None, working_dir, 1
+                        )
+
+                        # Thoát launcher hoàn toàn để PyInstaller dọn thư mục _MEI
+                        import os, sys
+                        time.sleep(0.5)
+                        os._exit(0)
+
+                    except Exception as e:
+                        print(f"Lỗi ShellExecute: {e}")
+                        try:
+                            os.startfile(target_exe, cwd=working_dir)
+                            time.sleep(0.5)
+                            os._exit(0)
+                        except:
+                            pass
+
                     
-                    # [FIX QUAN TRỌNG] Reset UI sau khi game chạy
+                    # Reset UI sau khi game chạy
                     time.sleep(3)
                     reset_ui_to_ready()
 
                 else:
-                    # ==> CASE 2: TẢI GAME (Nếu chưa có)
-                    status_txt.value = "Đang tải xuống..."
-                    status_txt.color = "blue"
-                    
-                    btn_play.text = "Hủy"
-                    btn_play.icon = ft.icons.CANCEL
-                    btn_play.on_click = lambda e: cancel_download(game_name, status_txt, progress_overlay, spinner, btn_play)
+                    # Trường hợp không tìm thấy file EXE
+                    status_txt.value = "Lỗi: Không tìm thấy file game (.exe)"
+                    status_txt.color = "red"
                     safe_ui_update()
-                    
-                    threading.Thread(target=download_game_process, args=(game_name, status_txt, progress_overlay, spinner, btn_play), daemon=True).start()
+                    time.sleep(3)
+                    reset_ui_to_ready()
 
             except Exception as e:
+                # [QUAN TRỌNG] Đây là EXCEPT CỦA TRY LỚN (Khắc phục lỗi Pylance)
                 status_txt.value = f"Lỗi: {str(e)[:15]}..."
                 status_txt.color = "red"
-                safe_ui_update()
-                
-                # Nếu lỗi thì cũng Reset UI sau 3s
+                status_txt.update()
                 time.sleep(3)
                 reset_ui_to_ready()
 
