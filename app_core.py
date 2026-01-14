@@ -884,7 +884,7 @@ class GhostDownloadPreview(ft.Container):
 
 
 
-CURRENT_VERSION = "2.0.3"
+CURRENT_VERSION = "2.0.5"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
