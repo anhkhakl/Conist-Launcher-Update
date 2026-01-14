@@ -56,7 +56,40 @@ def get_real_steam_url(lnd_soup):
     return None
 
 
+# --- [FIX MEI ERROR - SAFE MODE] DỌN DẸP THƯ MỤC TẠM (CHẠY NGẦM) ---
+def cleanup_mei_folders_safe():
+    def worker():
+        try:
+            # 1. Chỉ chạy khi là file EXE (Để không ảnh hưởng lúc Dev trên VS Code)
+            if not getattr(sys, 'frozen', False): 
+                return
 
+            base_temp = os.environ.get('TEMP')
+            if not base_temp: return
+            
+            # Lấy tên thư mục tạm của phiên bản ĐANG CHẠY (để không lỡ tay xóa nhầm)
+            current_mei = os.path.basename(sys._MEIPASS) if hasattr(sys, '_MEIPASS') else ""
+            
+            # Ngủ 1 giây để hệ thống ổn định trước khi quét rác
+            time.sleep(1)
+
+            # Quét và xóa các thư mục _MEI cũ
+            if os.path.exists(base_temp):
+                for item in os.listdir(base_temp):
+                    # Chỉ xóa thư mục _MEI và KHÁC thư mục hiện tại
+                    if item.startswith("_MEI") and item != current_mei:
+                        full_path = os.path.join(base_temp, item)
+                        try:
+                            # Xóa mạnh tay (ignore_errors=True để không crash nếu file đang bị khóa)
+                            shutil.rmtree(full_path, ignore_errors=True)
+                        except: pass
+        except: pass
+
+    # Chạy trên luồng phụ để không bao giờ làm treo App lúc khởi động
+    threading.Thread(target=worker, daemon=True).start()
+
+# Gọi hàm ngay lập tức
+cleanup_mei_folders_safe()
 
 
 
