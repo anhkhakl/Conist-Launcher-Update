@@ -8,6 +8,7 @@ import json
 import re
 import threading
 import time
+import stat
 import webbrowser
 import winreg as reg
 import winsound
@@ -30,42 +31,9 @@ try:
 except ImportError:
     HAS_TRAY_LIB = False
     print("Warning: Chưa cài pystray -> Tắt tính năng chạy ngầm.")
+ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
 
 
-# --- [FIX MEI ERROR - SAFE MODE] DỌN DẸP THƯ MỤC TẠM (CHẠY NGẦM) ---
-def cleanup_mei_folders_safe():
-    def worker():
-        try:
-            # 1. Chỉ chạy khi là file EXE (Để không ảnh hưởng lúc Dev trên VS Code)
-            if not getattr(sys, 'frozen', False): 
-                return
-
-            base_temp = os.environ.get('TEMP')
-            if not base_temp: return
-            
-            # Lấy tên thư mục tạm của phiên bản ĐANG CHẠY (để không lỡ tay xóa nhầm)
-            current_mei = os.path.basename(sys._MEIPASS) if hasattr(sys, '_MEIPASS') else ""
-            
-            # Ngủ 1 giây để hệ thống ổn định trước khi quét rác
-            time.sleep(1)
-
-            # Quét và xóa các thư mục _MEI cũ
-            if os.path.exists(base_temp):
-                for item in os.listdir(base_temp):
-                    # Chỉ xóa thư mục _MEI và KHÁC thư mục hiện tại
-                    if item.startswith("_MEI") and item != current_mei:
-                        full_path = os.path.join(base_temp, item)
-                        try:
-                            # Xóa mạnh tay (ignore_errors=True để không crash nếu file đang bị khóa)
-                            shutil.rmtree(full_path, ignore_errors=True)
-                        except: pass
-        except: pass
-
-    # Chạy trên luồng phụ để không bao giờ làm treo App lúc khởi động
-    threading.Thread(target=worker, daemon=True).start()
-
-# Gọi hàm ngay lập tức
-cleanup_mei_folders_safe()
 
 
 # --- CẤU HÌNH TURBO DOWNLOAD ---
@@ -89,7 +57,47 @@ def get_real_steam_url(lnd_soup):
     return None
 
 
+# --- [FIX MEI ERROR FINAL] DỌN DẸP THƯ MỤC TẠM (LOGIC CHUẨN) ---
+def cleanup_mei_folders_safe():
+    def remove_readonly(func, path, excinfo):
+        """Hàm trợ giúp: Tự động gỡ bỏ thuộc tính Read-only nếu xóa lỗi"""
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except: pass
 
+    def worker():
+        try:
+            # 1. Chỉ chạy khi là file EXE
+            if not getattr(sys, 'frozen', False): return
+
+            base_temp = os.environ.get('TEMP')
+            if not base_temp: return
+            
+            # Lấy tên thư mục hiện tại (để BẢO VỆ, không xóa nhầm)
+            current_mei = os.path.basename(sys._MEIPASS) if hasattr(sys, '_MEIPASS') else ""
+            
+            # Ngủ 1s để đảm bảo tiến trình cũ đã nhả file hoàn toàn
+            time.sleep(1)
+
+            if os.path.exists(base_temp):
+                for item in os.listdir(base_temp):
+                    # Logic: Tìm thư mục _MEI cũ (Không phải cái đang chạy)
+                    if item.startswith("_MEI") and item != current_mei:
+                        full_path = os.path.join(base_temp, item)
+                        try:
+                            # Xóa mạnh tay, dùng onexc để xử lý file lì lợm
+                            shutil.rmtree(full_path, ignore_errors=False, onexc=remove_readonly)
+                            print(f"[CLEANUP] Đã dọn dẹp rác: {item}")
+                        except: pass
+        except: pass
+
+    # Chạy luồng phụ để không ảnh hưởng tốc độ khởi động
+    threading.Thread(target=worker, daemon=True).start()
+
+# Gọi ngay lập tức
+cleanup_mei_folders_safe()
+# -----------------------------------------------------------------------
 
 
 
@@ -1945,48 +1953,63 @@ def main(page: ft.Page):
 
 
 
-    # --- [FIX FINAL V3] TẮT APP MƯỢT NHƯ GAME (GPU RENDER) ---
+   # --- [FIX FINAL V7] TẮT APP KHÔNG TREO (THREADED KILLER) ---
     def on_window_event(e):
         if e.data == "close":
+            # 1. Ẩn giao diện ngay lập tức để người dùng thấy App đã phản hồi
             try:
-                # 1. KÍCH HOẠT HIỆU ỨNG BIẾN MẤT (FADE OUT NỘI DUNG)
-                # Dùng GPU của Flet để làm mờ nội dung, mượt hơn làm mờ cửa sổ Windows gấp 10 lần
-                main_layout.animate_opacity = ft.Animation(200, "easeIn") # 200ms = 0.2 giây
-                main_layout.opacity = 0
-                main_layout.update()
-                
-                # 2. Đợi đúng 0.2s cho hiệu ứng chạy xong
-                time.sleep(0.2)
+                page.window.visible = False
+                page.update()
             except: pass
 
-            # 3. ẨN CỬA SỔ NGAY LẬP TỨC
-            page.window.visible = False
-            page.update()
+            # 2. Hàm sát thủ (Chạy ở luồng riêng)
+            def kill_all_processes():
+                import time
+                import os
+                import subprocess
+                import signal
 
-            # 4. DỌN DẸP CHIẾN TRƯỜNG (CHẠY NGẦM)
-            def background_cleanup():
+                # Đợi 0.1 giây cho Flet kịp giải phóng tài nguyên giao diện
+                time.sleep(0.1)
+
+                print(">> KILLER: Bắt đầu dọn dẹp tiến trình...")
+                pid = os.getpid()
+
                 try:
-                    # Hủy download
-                    if ACTIVE_DOWNLOADS:
-                        for name, state in list(ACTIVE_DOWNLOADS.items()):
-                            state['cancelled'] = True
-                        time.sleep(0.5) 
+                    # CÁCH 1: Dùng Taskkill với tham số /T (Tree) để diệt cả 3 process con
+                    # creationflags=0x08000000 (CREATE_NO_WINDOW) để không hiện màn hình đen
+                    subprocess.run(
+                        f"taskkill /F /T /PID {pid}", 
+                        shell=True, 
+                        creationflags=0x08000000
+                    )
+                except Exception as e:
+                    print(f"Killer Error: {e}")
 
-                    # Xử lý Tray Icon hoặc Thoát hẳn
-                    run_bg = APP_CONFIG.get("run_in_background", False)
-                    if run_bg and HAS_TRAY_LIB:
-                        # [QUAN TRỌNG] Reset lại độ rõ để lần sau mở lên từ Tray thì thấy được
-                        # (Vì App chỉ ẩn đi chứ không tắt hẳn)
-                        main_layout.opacity = 1
-                        page.update()
-                        threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
-                    else:
-                        page.window.destroy()
-                        os._exit(0) # Kill sạch sành sanh
-                except: 
-                    os._exit(0)
+                # CÁCH 2: Nếu Taskkill thất bại, dùng os._exit (Thoát cưỡng chế cấp OS)
+                # os._exit(0) mạnh hơn sys.exit() vì nó không chờ dọn dẹp Python
+                os._exit(0)
 
-            threading.Thread(target=background_cleanup, daemon=True).start()
+            # 3. Logic chạy ngầm (Giữ nguyên)
+            try:
+                run_bg = APP_CONFIG.get("run_in_background", False)
+                # Nếu là file EXE (frozen) thì mới cho chạy ngầm
+                is_exe = getattr(sys, 'frozen', False)
+
+                if run_bg and HAS_TRAY_LIB and is_exe:
+                    # Chế độ ẩn khay hệ thống
+                    main_layout.opacity = 1
+                    page.update()
+                    page.window.visible = False
+                    page.update()
+                    threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
+                else:
+                    # Chế độ tắt hẳn -> Gọi Sát thủ ở luồng riêng (Daemon)
+                    # Daemon=True nghĩa là luồng này sẽ tự chết nếu chương trình chính chết (nhưng ở đây ta chủ động giết)
+                    threading.Thread(target=kill_all_processes, daemon=True).start()
+            except:
+                # Fallback nếu lỗi logic
+                threading.Thread(target=kill_all_processes, daemon=True).start()
 
     page.window.prevent_close = True 
     page.window.on_event = on_window_event
@@ -3149,8 +3172,7 @@ def main(page: ft.Page):
 
         
 
-            # --- [MOVED UP] XỬ LÝ CHƠI GAME + WATCHER ---
-    # --- [FIX CORE] XỬ LÝ GIẢI NÉN VÀ CHƠI GAME ---
+     # --- [FIX CORE] XỬ LÝ GIẢI NÉN VÀ CHƠI GAME ---
     def handle_play_game(game_name, e, spinner, status_txt, btn_play, progress_overlay, icon_src=""):
         # Reset UI
         btn_play.visible = False
@@ -3315,7 +3337,6 @@ def main(page: ft.Page):
             reset_ui_ready()
 
         threading.Thread(target=game_worker, daemon=True).start()
-
 
 
 
@@ -3985,57 +4006,46 @@ def main(page: ft.Page):
 
 
 
-# --- [FIX] QUÉT FILE ZIP VÀ FOLDER CỰC MẠNH ---
+# --- [NEW] HÀM QUÉT KHÔI PHỤC GAME ĐÃ TẢI ---
     def scan_and_restore_downloaded_games():
         dl_dir = APP_CONFIG.get("download_dir")
+        
+        # Nếu chưa chọn thư mục thì thôi
         if not dl_dir or not os.path.exists(dl_dir): return
 
-        # Xóa UI cũ
+        # Xóa danh sách cũ để tránh trùng lặp
         finished_list_col.controls.clear()
-        
-        # Danh sách tạm để check trùng
-        temp_completed_names = []
+        COMPLETED_GAMES.clear()
 
-        # Duyệt qua danh sách game gốc
+        # Duyệt qua tất cả game trong dữ liệu (GAME_LIST)
+        count_found = 0
         for game in GAME_LIST:
-            game_name = game['name']
+            slug = clean_name_for_slug(game['name'])
             
-            # Bỏ qua nếu đang tải dở
-            if game_name in ACTIVE_DOWNLOADS: continue
-            
-            slug = clean_name_for_slug(game_name)
-            
-            # Kiểm tra 2 trường hợp:
-            # 1. File Zip còn đó
+            # 1. Đường dẫn file ZIP
             zip_path = os.path.join(dl_dir, f"{slug}.zip")
-            # 2. Hoặc Thư mục game đã giải nén
+            
+            # 2. Đường dẫn Thư mục (đã giải nén)
             folder_path = os.path.join(dl_dir, slug)
-            
-            is_downloaded = False
-            
-            # Logic: Chỉ cần 1 trong 2 tồn tại là coi như có game
-            if os.path.exists(zip_path):
-                is_downloaded = True
-            elif os.path.exists(folder_path) and os.path.isdir(folder_path):
-                # Check kỹ hơn: Folder phải có ít nhất 1 file bên trong
-                if len(os.listdir(folder_path)) > 0:
-                    is_downloaded = True
 
-            if is_downloaded:
-                # Tạo thẻ đã xong
+            # [LOGIC QUAN TRỌNG] Nếu tồn tại Zip HOẶC Folder -> Coi như đã xong
+            if os.path.exists(zip_path) or os.path.exists(folder_path):
+                
+                # Né những game đang tải dở (đang nằm bên tab Tiến độ)
+                if game['name'] in ACTIVE_DOWNLOADS: continue
+                
+                # [FIX] Đã sửa lambda truyền đủ tham số cho handle_play_game
                 card = create_finished_card(
-                    game_name, 
+                    game['name'], 
                     game['icon'], 
                     game['version'],
-                    # Truyền full tham số để nút Play hoạt động
-                    lambda e, i, t, b, p, g_name=game_name, g_icon=game['icon']: handle_play_game(g_name, e, i, t, b, p, g_icon)
+                    lambda e, i, t, b, p, g_name=game['name'], g_icon=game['icon']: handle_play_game(g_name, e, i, t, b, p, g_icon)
                 )
+                
                 finished_list_col.controls.append(card)
-                temp_completed_names.append(game_name)
+                COMPLETED_GAMES.append(game['name'])
+                count_found += 1
 
-        # Cập nhật lại danh sách hoàn thành toàn cục
-        COMPLETED_GAMES.clear()
-        COMPLETED_GAMES.extend(temp_completed_names)
         finished_list_col.update()
 
 
@@ -5607,23 +5617,50 @@ def main(page: ft.Page):
 
 
 
-# [Thay thế toàn bộ đoạn cuối cùng của file test.txt]
+# [THAY THẾ TOÀN BỘ ĐOẠN CUỐI CÙNG CỦA FILE]
+
+# Biến toàn cục giữ Mutex (Bắt buộc phải global để không bị Garbage Collector dọn mất)
+_app_mutex = None
+
+def acquire_mutex():
+    global _app_mutex
+    try:
+        # Tên khóa duy nhất. Thêm "Global\" để áp dụng cho toàn bộ user trên máy
+        mutex_name = "Global\\Conist_Link_Launcher_V2_EXCLUSIVE_LOCK"
+        
+        # Tạo Mutex
+        _app_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+        last_error = ctypes.windll.kernel32.GetLastError()
+        
+        # ERROR_ALREADY_EXISTS = 183
+        if last_error == 183:
+            return False # Đã có app chạy
+        return True # Chưa có app nào
+    except:
+        return True
 
 if __name__ == "__main__":
-    # 1. Fix Icon Taskbar (Chỉ hiệu quả khi chạy source code)
+    # 1. KIỂM TRA ĐA NHIỆM (SINGLE INSTANCE CHECK)
+    # Phải đặt cái này ĐẦU TIÊN, trước cả ft.app
+    if not acquire_mutex():
+        print(">> App đang chạy rồi! Đóng ngay lập tức.")
+        # Dùng os._exit để thoát ngay lập tức, không chờ đợi
+        os._exit(0)
+
+    # 2. Fix App ID cho Taskbar (Giúp nhóm cửa sổ đúng icon)
     try:
-        myappid = 'conist.link.launcher.v2.live' 
+        myappid = 'conist.link.launcher.v2.production' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
     
-    # 2. Khóa Mutex (Chống mở 2 Launcher cùng lúc)
-    mutex_id = "Global\\Conist_Launcher_v2_Unique_Lock"
+    # 3. Chạy Flet App
+    # assets_dir trỏ về thư mục chứa icon/ảnh
     try:
-        mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_id)
-        last_error = ctypes.windll.kernel32.GetLastError()
-        if last_error == 183: # ERROR_ALREADY_EXISTS
-            sys.exit(0)
-    except: pass
+        ft.app(target=main, assets_dir=BASE_DATA_PATH)
+    except Exception as e:
+        print(f"CRASH: {e}")
+        # Đảm bảo thoát sạch nếu Flet crash
+        os._exit(1)
     
     # 3. Chạy App Flet
     ft.app(target=main, assets_dir=BASE_DATA_PATH)
