@@ -1953,43 +1953,63 @@ def main(page: ft.Page):
 
 
 
-    # --- [FIX FINAL V5] TẮT APP "HỦY DIỆT" (TERMINATOR MODE) ---
+   # --- [FIX FINAL V7] TẮT APP KHÔNG TREO (THREADED KILLER) ---
     def on_window_event(e):
         if e.data == "close":
-            # 1. Ẩn giao diện ngay lập tức cho mượt
+            # 1. Ẩn giao diện ngay lập tức để người dùng thấy App đã phản hồi
             try:
                 page.window.visible = False
                 page.update()
             except: pass
 
-            def nuclear_exit():
-                # --- LỆNH HỦY DIỆT (TERMINATE PROCESS) ---
-                # Đây là lệnh cấp cao nhất của Windows. Nó giết tiến trình ngay tại chỗ.
-                # Bootloader của PyInstaller sẽ bị tắt ngóm trước khi kịp báo lỗi _MEI.
-                try:
-                    # [TỐI ƯU HƠN CHATGPT] Dùng GetCurrentProcess nhanh và chuẩn hơn OpenProcess
-                    handle = ctypes.windll.kernel32.GetCurrentProcess()
-                    ctypes.windll.kernel32.TerminateProcess(handle, 0)
-                except:
-                    # Fallback nếu xui xẻo (Hiếm khi vào đây)
-                    import os
-                    os._exit(0)
+            # 2. Hàm sát thủ (Chạy ở luồng riêng)
+            def kill_all_processes():
+                import time
+                import os
+                import subprocess
+                import signal
 
-            # 2. Logic chạy ngầm
+                # Đợi 0.1 giây cho Flet kịp giải phóng tài nguyên giao diện
+                time.sleep(0.1)
+
+                print(">> KILLER: Bắt đầu dọn dẹp tiến trình...")
+                pid = os.getpid()
+
+                try:
+                    # CÁCH 1: Dùng Taskkill với tham số /T (Tree) để diệt cả 3 process con
+                    # creationflags=0x08000000 (CREATE_NO_WINDOW) để không hiện màn hình đen
+                    subprocess.run(
+                        f"taskkill /F /T /PID {pid}", 
+                        shell=True, 
+                        creationflags=0x08000000
+                    )
+                except Exception as e:
+                    print(f"Killer Error: {e}")
+
+                # CÁCH 2: Nếu Taskkill thất bại, dùng os._exit (Thoát cưỡng chế cấp OS)
+                # os._exit(0) mạnh hơn sys.exit() vì nó không chờ dọn dẹp Python
+                os._exit(0)
+
+            # 3. Logic chạy ngầm (Giữ nguyên)
             try:
                 run_bg = APP_CONFIG.get("run_in_background", False)
-                # Nếu đang Dev (chạy bằng python.exe) thì KHÔNG chạy ngầm để dễ tắt
-                is_dev = not getattr(sys, 'frozen', False)
+                # Nếu là file EXE (frozen) thì mới cho chạy ngầm
+                is_exe = getattr(sys, 'frozen', False)
 
-                if run_bg and HAS_TRAY_LIB and not is_dev:
+                if run_bg and HAS_TRAY_LIB and is_exe:
+                    # Chế độ ẩn khay hệ thống
                     main_layout.opacity = 1
+                    page.update()
+                    page.window.visible = False
                     page.update()
                     threading.Thread(target=run_system_tray, args=[page], daemon=True).start()
                 else:
-                    # Nếu không chạy ngầm -> KÍCH HOẠT HỦY DIỆT
-                    nuclear_exit()
+                    # Chế độ tắt hẳn -> Gọi Sát thủ ở luồng riêng (Daemon)
+                    # Daemon=True nghĩa là luồng này sẽ tự chết nếu chương trình chính chết (nhưng ở đây ta chủ động giết)
+                    threading.Thread(target=kill_all_processes, daemon=True).start()
             except:
-                nuclear_exit()
+                # Fallback nếu lỗi logic
+                threading.Thread(target=kill_all_processes, daemon=True).start()
 
     page.window.prevent_close = True 
     page.window.on_event = on_window_event
@@ -5690,23 +5710,50 @@ def main(page: ft.Page):
 
 
 
-# [Thay thế toàn bộ đoạn cuối cùng của file test.txt]
+# [THAY THẾ TOÀN BỘ ĐOẠN CUỐI CÙNG CỦA FILE]
+
+# Biến toàn cục giữ Mutex (Bắt buộc phải global để không bị Garbage Collector dọn mất)
+_app_mutex = None
+
+def acquire_mutex():
+    global _app_mutex
+    try:
+        # Tên khóa duy nhất. Thêm "Global\" để áp dụng cho toàn bộ user trên máy
+        mutex_name = "Global\\Conist_Link_Launcher_V2_EXCLUSIVE_LOCK"
+        
+        # Tạo Mutex
+        _app_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+        last_error = ctypes.windll.kernel32.GetLastError()
+        
+        # ERROR_ALREADY_EXISTS = 183
+        if last_error == 183:
+            return False # Đã có app chạy
+        return True # Chưa có app nào
+    except:
+        return True
 
 if __name__ == "__main__":
-    # 1. Fix Icon Taskbar (Chỉ hiệu quả khi chạy source code)
+    # 1. KIỂM TRA ĐA NHIỆM (SINGLE INSTANCE CHECK)
+    # Phải đặt cái này ĐẦU TIÊN, trước cả ft.app
+    if not acquire_mutex():
+        print(">> App đang chạy rồi! Đóng ngay lập tức.")
+        # Dùng os._exit để thoát ngay lập tức, không chờ đợi
+        os._exit(0)
+
+    # 2. Fix App ID cho Taskbar (Giúp nhóm cửa sổ đúng icon)
     try:
-        myappid = 'conist.link.launcher.v2.live' 
+        myappid = 'conist.link.launcher.v2.production' 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
     
-    # 2. Khóa Mutex (Chống mở 2 Launcher cùng lúc)
-    mutex_id = "Global\\Conist_Launcher_v2_Unique_Lock"
+    # 3. Chạy Flet App
+    # assets_dir trỏ về thư mục chứa icon/ảnh
     try:
-        mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_id)
-        last_error = ctypes.windll.kernel32.GetLastError()
-        if last_error == 183: # ERROR_ALREADY_EXISTS
-            sys.exit(0)
-    except: pass
+        ft.app(target=main, assets_dir=BASE_DATA_PATH)
+    except Exception as e:
+        print(f"CRASH: {e}")
+        # Đảm bảo thoát sạch nếu Flet crash
+        os._exit(1)
     
     # 3. Chạy App Flet
     ft.app(target=main, assets_dir=BASE_DATA_PATH)
