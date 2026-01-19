@@ -1300,7 +1300,7 @@ def is_version_match_smart(ver_online, ver_local):
 
 
 
-def check_startup_status():
+def check_startup_status():  # <--- Dòng 403
     try:
         key = reg.OpenKey(reg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, reg.KEY_READ)
         reg.QueryValueEx(key, "ConistLauncher")
@@ -1308,7 +1308,7 @@ def check_startup_status():
         return True
     except: return False
 
-def toggle_startup(is_enabled):
+def toggle_startup(is_enabled): # <--- Dòng 410
     try:
         app_path = os.path.realpath(sys.argv[0])
         key = reg.OpenKey(reg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, reg.KEY_WRITE)
@@ -1884,16 +1884,23 @@ def main(page: ft.Page):
                     cached_data = {g['name']: g for g in json.load(f)}
             except: pass
 
-        # 3. Convert dữ liệu thật (Bỏ qua Dummy)
+        # 3. Convert dữ liệu thật
         for raw in RAW_GAME_DATA:
             try:
                 slug = clean_name_for_slug(raw['name'])
                 icon_path = os.path.join(ICON_FOLDER, f"{slug}.jpg")
                 saved = cached_data.get(raw['name'], {})
                 
-                # Logic lấy icon: Ưu tiên file trong máy -> Link web -> Placeholder
                 final_icon = icon_path if os.path.exists(icon_path) else raw.get('icon', '')
                 if not final_icon: final_icon = "https://via.placeholder.com/150"
+
+                # --- [DEBUG] KIỂM TRA ALBUM TỪ RAW ---
+                raw_album = raw.get('album', [])
+                if len(raw_album) > 0:
+                    print(f"✅ [DEBUG] Game '{raw['name']}' có {len(raw_album)} ảnh trong Raw.")
+                else:
+                    print(f"⚠️ [DEBUG] Game '{raw['name']}' KHÔNG thấy ảnh trong Raw!")
+                # -------------------------------------
 
                 game_obj = {
                     "name": raw['name'],
@@ -1906,7 +1913,9 @@ def main(page: ft.Page):
                     "status": saved.get('status', 'CHƯA KIỂM TRA'),
                     "mp_status": saved.get('mp_status', None), 
                     "requirements": saved.get('requirements', ''),
-                    "album_images": saved.get('album_images', [])
+                    
+                    # [CƯỠNG CHẾ] LUÔN LUÔN LẤY TỪ RAW ĐỂ TEST (Bỏ qua Cache)
+                    "album_images": raw_album
                 }
                 GAME_LIST.append(game_obj)
             except Exception as e:
@@ -2396,7 +2405,12 @@ def main(page: ft.Page):
         
         def refresh_ui(self):
             try:
-                self.img_control.src = self.game.get('icon', '')
+                # Nếu icon online lỗi -> lấy icon từ raw (nếu có)
+                icon_src = self.game.get('icon', '')
+                if not icon_src: 
+                    # Fallback về icon mặc định hoặc icon từ raw (nếu logic raw đã chuẩn)
+                    icon_src = "https://via.placeholder.com/150" 
+                self.img_control.src = icon_src
                 stt = self.game.get('status', '')
                 self.status_txt.value = stt
                 self.status_txt.color = "green" if "ĐÃ CẬP NHẬT" in stt else "orange"
@@ -4931,18 +4945,46 @@ def main(page: ft.Page):
         
         # 2. [FIX] Tạo Skeleton Loading (Ảnh giả) ngay lập tức
         # Để người dùng biết là đang tải, không bị trống trơn
+        # 2. [FIX LOGIC HIỂN THỊ] Ưu tiên hiện ảnh có sẵn (từ Raw hoặc Cache)
         dt_images_row.controls.clear()
-        for _ in range(5):
-            loading_card = ft.Container(
-                width=250, height=350, 
-                bgcolor="#20FFFFFF", border_radius=15,
-                alignment=ft.alignment.center,
-                content=ft.Column([
-                    ft.ProgressRing(width=30, height=30, stroke_width=3, color="orange"),
-                    ft.Text("Đang tải ảnh...", size=10, color="#888888")
-                ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
-            )
-            dt_images_row.controls.append(loading_card)
+        
+        # Kiểm tra xem game này đã có ảnh album chưa?
+        current_album = game.get('album_images', [])
+        
+        if current_album and len(current_album) > 0:
+            # ==> CÓ ẢNH: HIỆN LUÔN (Không chờ tải)
+            print(f"[UI] Dùng {len(current_album)} ảnh có sẵn cho {game['name']}")
+            
+            # Nhân bản để tạo hiệu ứng cuộn vô tận (nếu ít ảnh)
+            display_album = current_album * 4 if len(current_album) < 4 else current_album
+            
+            for img_src in display_album:
+                img_card = ft.Container(
+                    content=ft.Image(src=img_src, height=350, border_radius=10, fit=ft.ImageFit.FIT_HEIGHT),
+                    on_click=lambda e, s=img_src: setattr(dt_img_bg, 'src', s) or dt_img_bg.update(),
+                    animate_scale=ft.Animation(200, "easeOut"),
+                    on_hover=lambda e: (setattr(e.control, 'scale', 1.02 if e.data=='true' else 1.0) or e.control.update())
+                )
+                dt_images_row.controls.append(img_card)
+            
+            # Set hình nền mờ ngay lập tức
+            dt_img_bg.src = current_album[0]
+            dt_img_bg.opacity = 0.6
+            
+        else:
+            # ==> KHÔNG CÓ ẢNH: Mới hiện Skeleton Loading
+            for _ in range(5):
+                loading_card = ft.Container(
+                    width=250, height=350, 
+                    bgcolor="#20FFFFFF", border_radius=15,
+                    alignment=ft.alignment.center,
+                    content=ft.Column([
+                        ft.ProgressRing(width=30, height=30, stroke_width=3, color="orange"),
+                        ft.Text("Đang tải ảnh...", size=10, color="#888888")
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=10)
+                )
+                dt_images_row.controls.append(loading_card)
+        
         dt_images_row.scroll_x = 0
         
         # 3. Hàm xử lý logic chạy ngầm
