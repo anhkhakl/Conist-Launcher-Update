@@ -619,11 +619,7 @@ class ChangelogModal(ft.Container):
         self.bgcolor = "#00000000"
         
         self.changelog_content = """
-- Fix Lỗi cho lnd (cái bug xung đột với steam).
-- Tối ưu lại phần giao diện nhìn cho nó mượt hơn vs đẹp hơn.
-- Thêm thông tin nhiều và đa dạng hơn cho mỗi game kèm theo đó là cào dữ liệu từ steam và lnd cho phần info của mỗi game card.
-- Thêm phần online và offline cho mỗi 1 game card, dẫu phần này hơi chậm và ngu nên cần về sao fix lại.
-- Mẹ m bel.
+- Fix lại giao diện tag của game card tránh đc tường lửa và đọc đc game 18+.
         """
 
         # --- [1] ICON BÁNH RĂNG ---
@@ -925,7 +921,7 @@ class GhostDownloadPreview(ft.Container):
 
 
 
-CURRENT_VERSION = "2.0.5"
+CURRENT_VERSION = "2.0.6"
 
 
 # Gọi hàm tính đường dẫn (Lúc này hàm đã được tạo ở trên rồi -> Không lỗi nữa)
