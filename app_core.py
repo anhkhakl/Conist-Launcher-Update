@@ -3600,7 +3600,18 @@ def main(page: ft.Page):
         
         btn_pause = ft.IconButton(ft.icons.PAUSE_CIRCLE_FILLED, icon_color="yellow", icon_size=24, tooltip="Tạm dừng/Tiếp tục", on_click=on_pause_click)
         btn_cancel = ft.IconButton(ft.icons.CANCEL, icon_color="red", icon_size=24, tooltip="Hủy tải xuống", on_click=on_cancel_click)
-        img_icon = ft.Image(src=icon_src, width=50, height=50, border_radius=8, fit=ft.ImageFit.COVER)
+        # [SỬA LẠI DÒNG NÀY]
+        img_icon = ft.Image(
+            src=icon_src, 
+            width=50, 
+            height=50, 
+            border_radius=8, 
+            fit=ft.ImageFit.COVER,
+            
+            # [THÊM 2 DÒNG NÀY ĐỂ HẾT LAG]
+            cache_width=100,      # Chỉ load ảnh nhỏ vào RAM
+            gapless_playback=True # Tránh nháy hình
+        )
 
         card = ft.Container(
             bgcolor="#20FFFFFF", padding=10, border_radius=12,
