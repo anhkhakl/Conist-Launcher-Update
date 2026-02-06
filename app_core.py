@@ -20,6 +20,7 @@ import concurrent.futures
 import math     # <--- Fix lỗi math
 import ast      # <--- Fix lỗi ast
 import zipfile  # <--- Fix lỗi zipfile
+import traceback
 from bs4 import BeautifulSoup
 from PIL import Image
 
@@ -1500,6 +1501,9 @@ class ParticleSystem:
         self.page = page
         self.particles = []
         self.is_running = False
+        self.max_particles = 40
+        self.cooldown_sec = 0.08
+        self.last_spawn_ts = 0.0
         self.icons = ["❄️", "🎄", "🎁", "🔔", "🎅", "🦌", "🍪", "⛄", "✨"]
         self.colors = ["#FF4444", "#4CAF50", "#2196F3", "#FFD700", "#FFFFFF", "#E040FB"]
         
@@ -1511,45 +1515,63 @@ class ParticleSystem:
         )
 
     def spawn_particle(self, x, y, is_explosion=False):
-        txt = ft.Text(
-            random.choice(self.icons), 
-            size=random.randint(14, 24),
-            color=random.choice(self.colors),
-            opacity=1.0
-        )
-        p_obj = ft.Container(content=txt, left=x, top=y)
-        self.canvas.controls.append(p_obj)
-        
-        self.page.update()
+        now = time.time()
+        if now - self.last_spawn_ts < self.cooldown_sec:
+            return
+        self.last_spawn_ts = now
 
-        vx = random.uniform(-2, 2) if is_explosion else random.uniform(-0.5, 0.5)
-        vy = random.uniform(-5, -2) if is_explosion else random.uniform(2, 5)
-        self.particles.append([p_obj, x, y, vx, vy])
+        spawn_count = 12 if is_explosion else 1
+        added = 0
+        for _ in range(spawn_count):
+            if len(self.particles) >= self.max_particles:
+                break
+            txt = ft.Text(
+                random.choice(self.icons),
+                size=random.randint(14, 20),
+                color=random.choice(self.colors),
+                opacity=1.0,
+            )
+            p_obj = ft.Container(content=txt, left=x, top=y)
+            self.canvas.controls.append(p_obj)
+            vx = random.uniform(-2.2, 2.2) if is_explosion else random.uniform(-0.5, 0.5)
+            vy = random.uniform(-4.5, -1.8) if is_explosion else random.uniform(2, 4.5)
+            # [obj, x, y, vx, vy]
+            self.particles.append([p_obj, x, y, vx, vy])
+            added += 1
 
-        if not self.is_running:
+        if added > 0:
+            self.canvas.update()
+
+        if not self.is_running and self.particles:
             self.is_running = True
             self.page.run_task(self.game_loop)
 
     async def game_loop(self):
         while self.particles:
             h = self.page.window.height
-            to_remove = []
+            alive = []
+            removed_controls = []
             for p in self.particles:
-                p[4] += 0.2 
-                p[1] += p[3] 
-                p[2] += p[4] 
+                p[4] += 0.2
+                p[1] += p[3]
+                p[2] += p[4]
                 p[0].left = p[1]
                 p[0].top = p[2]
-                p[0].rotate = ft.Rotate((p[2] / 10), alignment=ft.alignment.center)
-                if p[2] > h + 50: to_remove.append(p)
+                if p[2] > h + 50:
+                    removed_controls.append(p[0])
+                else:
+                    alive.append(p)
 
-            for p in to_remove:
-                self.particles.remove(p)
-                try: self.canvas.controls.remove(p[0])
-                except: pass
-            
-            self.page.update()
-            await __import__("asyncio").sleep(0.016)
+            self.particles = alive
+            if removed_controls:
+                for ctrl in removed_controls:
+                    try:
+                        self.canvas.controls.remove(ctrl)
+                    except:
+                        pass
+
+            self.canvas.update()
+            await __import__("asyncio").sleep(0.033)
         self.is_running = False
 
 
@@ -1811,7 +1833,7 @@ def main(page: ft.Page):
     grid = ft.GridView(
         expand=True, runs_count=5, max_extent=180, child_aspect_ratio=0.7,
         spacing=20, run_spacing=20, padding=20,
-
+        cache_extent=900,
     )
 # --- [FIX FINAL] HÀM VẼ GRID CHUẨN (DÙNG CHUNG CHO ALL) ---
     def render_grid_safe(source_list):
@@ -1823,37 +1845,19 @@ def main(page: ft.Page):
                 grid.update()
                 return
 
-            # 1. Tạo thẻ (Mặc định tàng hình do class GameCard)
-            temp_cards = []
+            # 1. Tạo thẻ
             for g in source_list:
                 try:
                     card = GameCard(g)
-                    temp_cards.append(card)
                     grid.controls.append(card)
                 except: pass
             
-            # 2. Update Grid để Flet gắn thẻ vào Page
+            # 2. Update Grid ngay, không cascade animation để hiện nhanh
             grid.update()
-            
-            # 3. Chạy hiệu ứng "Thác đổ" (Có kiểm tra an toàn)
-            def animate_worker():
-                # [QUAN TRỌNG] Chờ 0.1s để đảm bảo thẻ đã được gắn vào Page
-                # Fix lỗi "Control must be added to the page first"
-                time.sleep(0.1) 
-                
-                for card in temp_cards:
-                    try:
-                        # Chỉ update nếu thẻ thực sự đang nằm trên Page
-                        if card.page: 
-                            card.opacity = 1
-                            card.update()
-                            time.sleep(0.03) # Tốc độ thác đổ
-                    except: pass
-            
-            threading.Thread(target=animate_worker, daemon=True).start()
 
         except Exception as e:
             print(f"Lỗi Render Grid: {e}")
+            traceback.print_exc()
     def refresh_data_and_grid():
         global RAW_GAME_DATA
         GAME_LIST.clear()
@@ -2205,8 +2209,8 @@ def main(page: ft.Page):
         page.update()
 
     # --- [FIX BUG UNIKEY] ---
-    # Biến lưu timer (đặt ngay trên hàm on_search)
-    search_timer = None 
+    # Debounce search bằng task trong event-loop (tránh render từ thread phụ)
+    search_seq = 0
 
     def run_search_logic(keyword):
         # Đây là hàm tìm kiếm thực sự (chạy sau khi đã ngừng gõ)
@@ -2225,20 +2229,15 @@ def main(page: ft.Page):
         except Exception as e:
             print(f"Lỗi Search: {e}")
 
+    async def run_search_debounced(keyword, seq):
+        await asyncio.sleep(0.4)
+        if seq == search_seq:
+            run_search_logic(keyword)
+
     def on_search(e):
-        nonlocal search_timer # Sử dụng biến timer khai báo bên trên
-        
-        # 1. Hủy hẹn giờ cũ (nếu người dùng gõ tiếp trong lúc đang đếm)
-        if search_timer:
-            search_timer.cancel()
-        
-        # 2. Lấy giá trị hiện tại
-        current_val = search_box.value 
-        
-        # 3. Tạo hẹn giờ mới (Delay 0.4 giây)
-        # Chỉ khi nào người dùng ngừng gõ 0.4s thì hàm run_search_logic mới được chạy
-        search_timer = threading.Timer(0.4, run_search_logic, args=[current_val])
-        search_timer.start()
+        nonlocal search_seq
+        search_seq += 1
+        page.run_task(run_search_debounced, search_box.value, search_seq)
 
     def hover_search(e):
         is_expand = e.data == "true" or search_box.value != ""
@@ -2353,9 +2352,8 @@ def main(page: ft.Page):
             self.animate_scale = ft.Animation(200, "easeOut")
             self.animate = ft.Animation(200, "easeOut")
             
-            # [FIX] Hiệu ứng hiện hình (300ms = Nhanh gọn & Sang)
-            self.opacity = 0  # Mặc định tàng hình
-            self.animate_opacity = ft.Animation(300, "easeOut")
+            # Ưu tiên xuất hiện ngay để cuộn sớm không bị hụt card
+            self.opacity = 1
             
             # Gắn sự kiện
             self.on_click = lambda e: (play_click_sound(), self.open_detail(e))
@@ -2379,7 +2377,15 @@ def main(page: ft.Page):
             # Hình ảnh
             icon_src = self.game.get('icon', '')
             if not icon_src: icon_src = "https://via.placeholder.com/150"
-            self.img_control = ft.Image(src=icon_src, width=140, height=140, border_radius=10, fit=ft.ImageFit.COVER)
+            self.img_control = ft.Image(
+                src=icon_src,
+                width=140,
+                height=140,
+                border_radius=10,
+                fit=ft.ImageFit.COVER,
+                gapless_playback=True,
+                filter_quality=ft.FilterQuality.LOW,
+            )
             
             # 3. Giao diện Card
             self.content = ft.Column([
@@ -4316,6 +4322,18 @@ def main(page: ft.Page):
         search_box.value = ""
         search_box.update()
         run_search_logic("") 
+
+        try:
+            grid.scroll_to(offset=0, duration=250, curve=ft.AnimationCurve.EASE_OUT)
+        except:
+            pass
+
+        # Nếu đang mở trang chi tiết thì đóng về màn chính
+        try:
+            if game_detail_overlay.offset.y == 0:
+                close_detail()
+        except:
+            pass
         
         # Đóng sidebar
         sidebar_state["sidebar"] = False
@@ -4411,7 +4429,7 @@ def main(page: ft.Page):
         bgcolor="#33FFFFFF", border_radius=15, 
         alignment=ft.alignment.center,
         opacity=0.5, animate_opacity=200, animate_scale=ft.Animation(200, "easeOut"),
-        on_click=lambda e: on_search(None),
+        on_click=reset_to_home,
         tooltip="Về trang chủ",
         on_hover=animate_sidebar_btn
     )
@@ -4941,6 +4959,34 @@ def main(page: ft.Page):
     # =================================================================
     # HÀM HIỂN THỊ CHI TIẾT GAME (UPDATE LOGIC LOADING ẢNH)
     # =================================================================
+    def preview_album_bg_on_hover(e, src):
+        if e.data == "true" and dt_img_bg.src != src:
+            dt_img_bg.src = src
+            dt_img_bg.update()
+
+    def build_album_controls(album_sources):
+        controls = []
+        if not album_sources:
+            return controls
+
+        # Giới hạn số lượng thẻ ảnh để tránh giật khi mở overlay
+        display_sources = list(album_sources)[:12]
+        for img_src in display_sources:
+            img_card = ft.Container(
+                content=ft.Image(
+                    src=img_src,
+                    height=350,
+                    border_radius=10,
+                    fit=ft.ImageFit.FIT_HEIGHT,
+                    gapless_playback=True,
+                    filter_quality=ft.FilterQuality.LOW,
+                ),
+                on_click=lambda e, s=img_src: setattr(dt_img_bg, "src", s) or dt_img_bg.update(),
+                on_hover=lambda e, s=img_src: preview_album_bg_on_hover(e, s),
+            )
+            controls.append(img_card)
+        return controls
+
     def show_game_detail_dialog(game, card_ref):
         # 1. Reset UI cơ bản
         dt_name.value = game['name']
@@ -4961,18 +5007,7 @@ def main(page: ft.Page):
         if current_album and len(current_album) > 0:
             # ==> CÓ ẢNH: HIỆN LUÔN (Không chờ tải)
             print(f"[UI] Dùng {len(current_album)} ảnh có sẵn cho {game['name']}")
-            
-            # Nhân bản để tạo hiệu ứng cuộn vô tận (nếu ít ảnh)
-            display_album = current_album * 4 if len(current_album) < 4 else current_album
-            
-            for img_src in display_album:
-                img_card = ft.Container(
-                    content=ft.Image(src=img_src, height=350, border_radius=10, fit=ft.ImageFit.FIT_HEIGHT),
-                    on_click=lambda e, s=img_src: setattr(dt_img_bg, 'src', s) or dt_img_bg.update(),
-                    animate_scale=ft.Animation(200, "easeOut"),
-                    on_hover=lambda e: (setattr(e.control, 'scale', 1.02 if e.data=='true' else 1.0) or e.control.update())
-                )
-                dt_images_row.controls.append(img_card)
+            dt_images_row.controls.extend(build_album_controls(current_album))
             
             # Set hình nền mờ ngay lập tức
             dt_img_bg.src = current_album[0]
@@ -4999,8 +5034,6 @@ def main(page: ft.Page):
             dt_update_btn.start_loading()
             
             def worker():
-                time.sleep(0.5) # Delay nhẹ
-                
                 # Cào dữ liệu
                 data = fetch_full_details(game['lnd_url'])
                 
@@ -5023,37 +5056,15 @@ def main(page: ft.Page):
                 if data.get('album'):
                     album = data['album']
                     game['album_images'] = album 
-                    
-                    # [QUAN TRỌNG] Nhân bản để tạo cảm giác vô tận
-                    infinite_album = album * 4 
-                    
                     dt_images_row.controls.clear()
-                    
-                    for img_src in infinite_album:
-                        img_card = ft.Container(
-                            content=ft.Image(src=img_src, height=350, border_radius=10, fit=ft.ImageFit.FIT_HEIGHT),
-                            on_click=lambda e, s=img_src: setattr(dt_img_bg, 'src', s) or dt_img_bg.update(),
-                            # Hiệu ứng hover nhẹ
-                            animate_scale=ft.Animation(200, "easeOut"),
-                            on_hover=lambda e: (setattr(e.control, 'scale', 1.02 if e.data=='true' else 1.0) or e.control.update())
-                        )
-                        dt_images_row.controls.append(img_card)
+                    dt_images_row.controls.extend(build_album_controls(album))
                     
                     # Cập nhật hình nền mờ bằng ảnh đầu tiên lấy được
                     if len(album) > 0:
                         dt_img_bg.src = album[0]
                         dt_img_bg.opacity = 0.6 
-                        dt_img_bg.update()
-                    
-                    # [FIX] Tính toán vị trí giữa để cuộn tới
-                    # Giả sử mỗi ảnh rộng trung bình 250px + 10px padding
-                    mid_index = len(infinite_album) // 2
-                    scroll_pos = mid_index * 260 
-                    
-                    dt_images_row.scroll_x = scroll_pos
+                    dt_images_row.scroll_x = 0
                     dt_images_row.update()
-                    # Cuộn nhẹ 1 chút để tạo hiệu ứng
-                    dt_images_row.scroll_to(offset=scroll_pos, duration=0)
 
                 # C. Check Version
                 web = data.get('web_version', 'Unknown')
@@ -5507,6 +5518,12 @@ def main(page: ft.Page):
 
 
     # --- WORKER: Tải Ảnh + Check Steam (Đã tích hợp lấy Logo Steam) ---
+    async def schedule_grid_refresh():
+        try:
+            grid.update()
+        except:
+            pass
+
     def process_single_icon(g):
         has_new = False
         try:
@@ -5542,14 +5559,7 @@ def main(page: ft.Page):
                 if g.get('icon') != local_path:
                     g['icon'] = local_path
             
-            # 3. CẬP NHẬT UI
-            if has_new:
-                try:
-                    for card in grid.controls:
-                        if card.game['name'] == g['name']:
-                            card.refresh_ui()
-                            break
-                except: pass
+            # 3. Không update UI theo từng card trong worker để tránh giật khung hình
 
         except Exception: pass
         return has_new
@@ -5581,19 +5591,10 @@ def main(page: ft.Page):
                 # Nếu có file -> Check nhanh dung lượng (tránh file rác)
                 # Thao tác này cực nhanh, không đáng kể
                 if os.path.getsize(local_path) > 1024:
-                    # File ngon -> Update RAM và UI ngay lập tức
+                    # File ngon -> Update RAM, UI sẽ refresh batch sau
                     if g.get('icon') != local_path:
                         g['icon'] = local_path
-                        # Update UI
-                        try:
-                            for card in grid.controls:
-                                if card.game['name'] == g['name']:
-                                    # Chỉ update nếu src khác nhau để đỡ giật
-                                    if card.img_control.src != local_path:
-                                        card.img_control.src = local_path
-                                        card.img_control.update()
-                                    break
-                        except: pass
+                        changed = True
                     continue # Bỏ qua, không cần tải
             
             # Nếu chạy xuống đây nghĩa là thiếu file hoặc file lỗi
@@ -5601,6 +5602,8 @@ def main(page: ft.Page):
 
         # --- GIAI ĐOẠN 2: CHỈ TẢI CÁI THIẾU (Đa luồng) ---
         if not missing_games:
+            if changed:
+                page.run_task(schedule_grid_refresh)
             print("[FLASH] ✅ Full ảnh. Không tốn 1 giọt RAM nào để tải.")
             return
 
@@ -5618,9 +5621,7 @@ def main(page: ft.Page):
             print("[FLASH] Đã cập nhật xong cache ảnh.")
             save_cache()
             # Chỉ update Grid 1 lần duy nhất sau khi tải xong tất cả
-            try:
-                grid.update() 
-            except: pass
+            page.run_task(schedule_grid_refresh)
 
 
 
@@ -5631,7 +5632,6 @@ def main(page: ft.Page):
             time.sleep(1)
 
     threading.Thread(target=idle_checker, daemon=True).start()
-    threading.Thread(target=bg_download_icons, daemon=True).start()
     # start_global_game_watcher()
     if APP_CONFIG.get("auto_update_games", False):
         # Lúc này đang ở trong hàm main nên nó mới nhìn thấy process_game_updates_thread
