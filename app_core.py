@@ -3052,47 +3052,34 @@ def main(page: ft.Page):
     )
 
     # Hàm chạy kịch bản Animation (V11.0 - Đích Y:620)
+    download_sidebar_anim_ref = {"btn": None, "icon": None}
+
     async def run_download_anim():
-        # 1. Reset về vị trí xuất phát (530)
-        dl_anim_box.top = 530
-        dl_anim_box.opacity = 1
-        dl_anim_box.visible = True
-        dl_anim_box.border = None
-        dl_anim_box.bgcolor = None 
-        dl_anim_box.update()
-        
-        await asyncio.sleep(0.1)
-        
-        # 2. Bay xuống đích (620)
-        dl_anim_box.top = 620 
-        dl_anim_box.update()
-        
-        # Chờ bay xong (0.8s)
-        await asyncio.sleep(0.8)
-        
-        # 3. Biến mất
-        dl_anim_box.opacity = 0
-        dl_anim_box.update()
-        
-        await asyncio.sleep(0.3)
-        dl_anim_box.visible = False
-        dl_anim_box.update()
+        btn = download_sidebar_anim_ref.get("btn")
+        icon = download_sidebar_anim_ref.get("icon")
+        if not btn or not icon:
+            return
 
+        try:
+            btn.opacity = 1.0
+            btn.scale = 1.0
+            icon.offset = ft.Offset(0, 0)
+            btn.update()
+            icon.update()
 
+            await asyncio.sleep(0.05)
+            btn.scale = 1.12
+            icon.offset = ft.Offset(0, -0.25)
+            btn.update()
+            icon.update()
 
-
-
-
-
-
-
-        
-        # [Mẹo] Kích hoạt nút thật hiện lên 1 chút để báo hiệu
-        dl_btn_visible.opacity = 1
-        dl_btn_visible.update()
-        await asyncio.sleep(0.5)
-        dl_btn_visible.opacity = 0 # Lại tàng hình
-        dl_btn_visible.update()
+            await asyncio.sleep(0.15)
+            btn.scale = 1.0
+            icon.offset = ft.Offset(0, 0)
+            btn.update()
+            icon.update()
+        except:
+            pass
 
     def on_dir_result(e: ft.FilePickerResultEvent):
         if e.path:
@@ -3613,9 +3600,6 @@ def main(page: ft.Page):
             height=50, 
             border_radius=8, 
             fit=ft.ImageFit.COVER,
-            
-            # [THÊM 2 DÒNG NÀY ĐỂ HẾT LAG]
-            cache_width=100,      # Chỉ load ảnh nhỏ vào RAM
             gapless_playback=True # Tránh nháy hình
         )
 
@@ -3996,19 +3980,15 @@ def main(page: ft.Page):
         dl_btn_visible.scale = 1.1 if is_hover else 0.8
         dl_btn_visible.update()
 
-   # 3. Vùng chứa nút (Đã nâng lên 25px -> Y:620)
+   # 3. Nút download ngoài màn hình cũ: vô hiệu hóa, đã chuyển vào sidebar
     dl_trigger_zone = ft.Container(
         content=dl_btn_visible,
-        width=65, height=65, 
+        width=0, height=0,
         bgcolor=None,
         alignment=ft.alignment.center,
-        
-        # [FIX] Tọa độ: X=67, Y=620
-        left=67, top=620, 
-        
-        on_hover=hover_dl_zone,
-        on_click=open_downloads_drawer,
-        tooltip="Quản lý tải xuống"
+        left=0, top=0,
+        visible=False,
+        on_click=None,
     )
 
 
@@ -4338,10 +4318,15 @@ def main(page: ft.Page):
         # Đóng sidebar
         sidebar_state["sidebar"] = False
         sidebar_state["trigger"] = False
-        sidebar_container.offset = ft.Offset(1.1, 0)
+        sidebar_container.offset = ft.Offset(-1.1, 0)
         sidebar_blur_layer.opacity = 0
+        corner_nav_hint.visible = True
+        corner_nav_hint.opacity = 0.82
+        corner_nav_hint.scale = 0.62
+        corner_nav_hint.offset = ft.Offset(0, 0)
         sidebar_container.update()
         sidebar_blur_layer.update()
+        corner_nav_hint.update()
         
         def delayed_hide_blur():
             time.sleep(0.3)
@@ -4383,7 +4368,7 @@ def main(page: ft.Page):
         on_hover=animate_sidebar_btn
     )
 
-    # 1. Hàm xử lý Animation cho nút (Đã Fix lỗi lần đầu)
+    # 1. Hàm xử lý Animation cho nút (mượt + rõ trạng thái hover)
     def animate_sidebar_btn(e):
         icon = e.control.content
         is_hover = e.data == "true"
@@ -4395,25 +4380,33 @@ def main(page: ft.Page):
         # Logic nảy icon Home
         elif icon.name == ft.icons.HOME:
             icon.offset.y = -0.3 if is_hover else 0
+        elif icon.name == ft.icons.ARROW_DOWNWARD:
+            icon.offset.y = -0.3 if is_hover else 0
 
-        # Hiệu ứng mờ & zoom
-        e.control.opacity = 1.0 if is_hover else 0.5 
-        e.control.scale = 1.1 if is_hover else 1.0   
+        # Hiệu ứng mờ + zoom + nổi khối
+        e.control.opacity = 1.0 if is_hover else 0.78
+        e.control.scale = 1.08 if is_hover else 1.0
+        e.control.bgcolor = "#5AFFFFFF" if is_hover else "#2EFFFFFF"
+        e.control.border = ft.border.all(1, "#90FFFFFF") if is_hover else ft.border.all(1, "#45FFFFFF")
         
         icon.update()
         e.control.update()
 
-    # 2. Định nghĩa các nút (Có opacity=0.5 để kích hoạt animation)
+    # 2. Định nghĩa các nút
     btn_setting_sidebar = ft.Container(
         content=ft.Icon(
-            ft.icons.SETTINGS, color="white", size=24,
+            ft.icons.SETTINGS, color="white", size=25,
             rotate=ft.Rotate(0, alignment=ft.alignment.center),
             animate_rotation=ft.Animation(400, "easeOutBack"),
         ),
-        width=50, height=50, 
-        bgcolor="#33FFFFFF", border_radius=15, 
+        width=58, height=58,
+        bgcolor="#2EFFFFFF", border_radius=17,
+        border=ft.border.all(1, "#45FFFFFF"),
         alignment=ft.alignment.center,
-        opacity=0.5, animate_opacity=200, animate_scale=ft.Animation(200, "easeOut"),
+        opacity=0.78,
+        animate_opacity=220,
+        animate_scale=ft.Animation(220, "easeOutCubic"),
+        animate=ft.Animation(220, "easeOutCubic"),
         on_click=toggle_settings_drawer, 
         tooltip="Cài đặt hệ thống",
         on_hover=animate_sidebar_btn
@@ -4421,18 +4414,44 @@ def main(page: ft.Page):
 
     btn_home_sidebar = ft.Container(
         content=ft.Icon(
-            ft.icons.HOME, color="white", size=24,
+            ft.icons.HOME, color="white", size=25,
             offset=ft.Offset(0, 0),
             animate_offset=ft.Animation(300, "bounceOut"),
         ),
-        width=50, height=50, 
-        bgcolor="#33FFFFFF", border_radius=15, 
+        width=58, height=58,
+        bgcolor="#2EFFFFFF", border_radius=17,
+        border=ft.border.all(1, "#45FFFFFF"),
         alignment=ft.alignment.center,
-        opacity=0.5, animate_opacity=200, animate_scale=ft.Animation(200, "easeOut"),
+        opacity=0.78,
+        animate_opacity=220,
+        animate_scale=ft.Animation(220, "easeOutCubic"),
+        animate=ft.Animation(220, "easeOutCubic"),
         on_click=reset_to_home,
         tooltip="Về trang chủ",
         on_hover=animate_sidebar_btn
     )
+
+    btn_download_sidebar = ft.Container(
+        content=ft.Icon(
+            ft.icons.ARROW_DOWNWARD, color="white", size=25,
+            offset=ft.Offset(0, 0),
+            animate_offset=ft.Animation(300, "bounceOut"),
+        ),
+        width=58, height=58,
+        bgcolor="#2EFFFFFF", border_radius=17,
+        border=ft.border.all(1, "#45FFFFFF"),
+        alignment=ft.alignment.center,
+        opacity=0.78,
+        animate_opacity=220,
+        animate_scale=ft.Animation(220, "easeOutCubic"),
+        animate=ft.Animation(220, "easeOutCubic"),
+        on_click=open_downloads_drawer,
+        tooltip="Mở kho tải xuống",
+        on_hover=animate_sidebar_btn
+    )
+
+    download_sidebar_anim_ref["btn"] = btn_download_sidebar
+    download_sidebar_anim_ref["icon"] = btn_download_sidebar.content
 
     # 3. [MISSING] Lớp mờ nền (Biến mà bạn đang bị báo lỗi thiếu)
     sidebar_blur_layer = ft.Container(
@@ -4466,13 +4485,13 @@ def main(page: ft.Page):
             def close_sequence():
                 time.sleep(0.1) 
                 if not (sidebar_state["trigger"] or sidebar_state["sidebar"]):
-                    sidebar_container.offset = ft.Offset(1.1, 0)
+                    sidebar_container.offset = ft.Offset(-1.1, 0)
                     sidebar_blur_layer.opacity = 0
                     sidebar_container.update()
                     sidebar_blur_layer.update()
                     
                     time.sleep(0.3)
-                    if sidebar_container.offset.x > 0.5:
+                    if abs(sidebar_container.offset.x) > 0.5:
                         sidebar_blur_layer.visible = False
                         try: page.update()
                         except: pass
@@ -4483,17 +4502,19 @@ def main(page: ft.Page):
         data="sidebar",
         width=200, 
         bgcolor="#44000000", 
-        top=0, bottom=0, right=0,
-        border_radius=ft.border_radius.only(top_left=20, bottom_left=20),
-        offset=ft.Offset(1.1, 0),
+        top=0, bottom=0, left=0,
+        border_radius=ft.border_radius.only(top_right=20, bottom_right=20),
+        offset=ft.Offset(-1.1, 0),
         animate_offset=ft.Animation(300, "easeOut"), 
         on_hover=sidebar_logic, 
         padding=ft.padding.only(bottom=30),
         content=ft.Column([
             ft.WindowDragArea(ft.Container(bgcolor="transparent", expand=True), expand=True),
+            ft.Row([btn_home_sidebar], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Container(height=20),
             ft.Row([btn_setting_sidebar], alignment=ft.MainAxisAlignment.CENTER),
             ft.Container(height=20),
-            ft.Row([btn_home_sidebar], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Row([btn_download_sidebar], alignment=ft.MainAxisAlignment.CENTER),
         ], alignment=ft.MainAxisAlignment.END)
     )
 
@@ -4501,7 +4522,7 @@ def main(page: ft.Page):
     trigger_zone = ft.Container(
         data="trigger",
         width=60, 
-        top=70, bottom=0, right=0,
+        top=70, bottom=0, left=0,
         bgcolor=None,
         on_hover=sidebar_logic 
     )
@@ -4525,22 +4546,32 @@ def main(page: ft.Page):
             sidebar_container.offset = ft.Offset(0, 0)
             sidebar_blur_layer.visible = True
             sidebar_blur_layer.opacity = 1
+            corner_nav_hint.visible = True
+            corner_nav_hint.opacity = 0.28
+            corner_nav_hint.scale = 1.22
+            corner_nav_hint.offset = ft.Offset(0, -1.18)
             sidebar_container.update()
             sidebar_blur_layer.update()
+            corner_nav_hint.update()
         else:
             # 3. Delay nhẹ 0.1s: Để chuột kịp nhảy từ Trigger sang Sidebar mà không bị đóng
             def close_sequence():
                 time.sleep(0.1) 
                 # Check lại lần chốt: Nếu chuột không ở cả 2 nơi thì mới đóng
                 if not (sidebar_state["trigger"] or sidebar_state["sidebar"]):
-                    sidebar_container.offset = ft.Offset(1.1, 0)
+                    sidebar_container.offset = ft.Offset(-1.1, 0)
                     sidebar_blur_layer.opacity = 0
+                    corner_nav_hint.visible = True
+                    corner_nav_hint.opacity = 0.82
+                    corner_nav_hint.scale = 0.62
+                    corner_nav_hint.offset = ft.Offset(0, 0)
                     sidebar_container.update()
                     sidebar_blur_layer.update()
+                    corner_nav_hint.update()
                     
                     # Đợi Sidebar thụt vào xong (0.3s) mới tắt hẳn layer mờ
                     time.sleep(0.3)
-                    if sidebar_container.offset.x > 0.5:
+                    if abs(sidebar_container.offset.x) > 0.5:
                         sidebar_blur_layer.visible = False
                         try: page.update()
                         except: pass
@@ -4550,31 +4581,79 @@ def main(page: ft.Page):
     # --- [NEW] 3. CONTAINER CHÍNH CỦA SIDEBAR ---
     sidebar_container = ft.Container(
         data="sidebar", # [QUAN TRỌNG] Đánh dấu tên để Logic nhận diện
-        width=200, 
-        bgcolor="#44000000", 
-        top=0, bottom=0, right=0,
-        border_radius=ft.border_radius.only(top_left=20, bottom_left=20),
-        offset=ft.Offset(1.1, 0),
-        animate_offset=ft.Animation(300, "easeOut"), 
+        width=220,
+        bgcolor="#6610152B",
+        gradient=ft.LinearGradient(
+            colors=["#8833465D", "#6610152B", "#7A162033"],
+            begin=ft.alignment.top_center,
+            end=ft.alignment.bottom_center,
+        ),
+        blur=ft.Blur(8, 8, ft.BlurTileMode.MIRROR),
+        top=0, bottom=0, left=0,
+        border_radius=ft.border_radius.only(top_right=24, bottom_right=24),
+        border=ft.border.only(right=ft.border.BorderSide(1, "#55FFFFFF")),
+        offset=ft.Offset(-1.1, 0),
+        animate_offset=ft.Animation(420, "easeOutCubic"),
         on_hover=sidebar_logic, 
-        padding=ft.padding.only(bottom=30),
+        padding=ft.padding.only(bottom=36),
         content=ft.Column([
             ft.WindowDragArea(ft.Container(bgcolor="transparent", expand=True), expand=True),
-            ft.Row([btn_setting_sidebar], alignment=ft.MainAxisAlignment.CENTER),
-            ft.Container(height=20),
             ft.Row([btn_home_sidebar], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Container(height=18),
+            ft.Row([btn_setting_sidebar], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Container(height=18),
+            ft.Row([btn_download_sidebar], alignment=ft.MainAxisAlignment.CENTER),
         ], alignment=ft.MainAxisAlignment.END)
     )
 
 
     trigger_zone = ft.Container(
         data="trigger", 
-        width=80,       # Rộng ra chút để dễ quẹt trúng
-        height=250,     # Chiều cao giới hạn (Không full màn hình nữa)
-        right=0, 
-        bottom=0,       # [QUAN TRỌNG] Neo xuống đáy
+        width=150,      # Vùng kích hoạt góc trái dưới
+        height=280,     # Rộng hơn để rê chuột gần là bắt được
+        left=0, 
+        bottom=0,
         bgcolor=None,   # Trong suốt
         on_hover=sidebar_logic 
+    )
+
+    # Dock mini ở góc màn hình: báo hiệu 3 nút chính (Home/Setting/Download)
+    corner_nav_hint = ft.Container(
+        data="trigger",
+        left=10, bottom=14,
+        width=30, height=105,
+        padding=ft.padding.symmetric(horizontal=5, vertical=6),
+        border_radius=12,
+        bgcolor="#6610182A",
+        border=ft.border.all(1, "#66FFFFFF"),
+        opacity=0.82,
+        scale=0.62,
+        offset=ft.Offset(0, 0),
+        animate_opacity=220,
+        animate_scale=ft.Animation(280, "easeOutCubic"),
+        animate_offset=ft.Animation(360, "easeOutCubic"),
+        animate=ft.Animation(240, "easeOutCubic"),
+        on_hover=sidebar_logic,
+        content=ft.Column([
+            ft.Container(
+                width=18, height=18, border_radius=6,
+                bgcolor="#28FFFFFF",
+                alignment=ft.alignment.center,
+                content=ft.Icon(ft.icons.HOME, size=10, color="#E6FFFFFF"),
+            ),
+            ft.Container(
+                width=18, height=18, border_radius=6,
+                bgcolor="#28FFFFFF",
+                alignment=ft.alignment.center,
+                content=ft.Icon(ft.icons.SETTINGS, size=10, color="#E6FFFFFF"),
+            ),
+            ft.Container(
+                width=18, height=18, border_radius=6,
+                bgcolor="#28FFFFFF",
+                alignment=ft.alignment.center,
+                content=ft.Icon(ft.icons.ARROW_DOWNWARD, size=10, color="#E6FFFFFF"),
+            ),
+        ], spacing=8, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
     )
 # --- [ADD] TAB QUẢN LÝ DOWNLOAD ---
 
@@ -4819,7 +4898,7 @@ def main(page: ft.Page):
             if 'body_container' in locals() or 'body_container' in globals():
                 body_container.opacity = 0
             # Ẩn sidebar
-            sidebar_container.offset = ft.Offset(1.1, 0)
+            sidebar_container.offset = ft.Offset(-1.1, 0)
             sidebar_blur_layer.opacity = 0
             sleep_overlay.visible = True
             page.update()
@@ -5138,7 +5217,8 @@ def main(page: ft.Page):
 
         # Hiển thị Overlay
         trigger_zone.visible = False
-        sidebar_container.offset = ft.Offset(1.1, 0)
+        corner_nav_hint.visible = False
+        sidebar_container.offset = ft.Offset(-1.1, 0)
         dl_trigger_zone.visible = False
         game_detail_overlay.offset = ft.Offset(0, 0)
         page.update()
@@ -5150,6 +5230,11 @@ def main(page: ft.Page):
         dl_trigger_zone.visible = True
         dl_trigger_zone.update()
         trigger_zone.visible = True
+        corner_nav_hint.visible = True
+        corner_nav_hint.opacity = 0.82
+        corner_nav_hint.scale = 0.62
+        corner_nav_hint.offset = ft.Offset(0, 0)
+        corner_nav_hint.update()
         trigger_zone.update()
         page.update()
 
@@ -5301,6 +5386,7 @@ def main(page: ft.Page):
             game_detail_overlay,    
             sidebar_blur_layer,  
             trigger_zone,         
+            corner_nav_hint,
             sidebar_container,     
             blur_overlay,         
             settings_drawer,
